@@ -13,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/talatmursalin/ekshunno-executor/xcore/compilers"
 	"github.com/talatmursalin/ekshunno-executor/xcore/utils"
 )
@@ -70,7 +71,7 @@ func (sdb *SandboxExecutor) createConatiner() {
 	checkError(err)
 }
 
-func (sdb *SandboxExecutor) runInsideDocker(cmds []string) string {
+func (sdb *SandboxExecutor) runInsideDocker(cmds []string) utils.ExecResult {
 	fmt.Println("Exec : ", cmds)
 	conf := types.ExecConfig{
 		AttachStdout: false,
@@ -81,17 +82,46 @@ func (sdb *SandboxExecutor) runInsideDocker(cmds []string) string {
 	execID, _ := sdb.client.ContainerExecCreate(sdb.ctx, sdb.container.ID, conf)
 
 	config := types.ExecStartCheck{}
-	res, err := sdb.client.ContainerExecAttach(sdb.ctx, execID.ID, config)
+	resp, err := sdb.client.ContainerExecAttach(sdb.ctx, execID.ID, config)
 	checkError(err)
+	defer resp.Close()
 
 	err = sdb.client.ContainerExecStart(sdb.ctx, execID.ID, types.ExecStartCheck{})
 	checkError(err)
 
-	buf, err := ioutil.ReadAll(res.Reader)
-	if err != nil {
-		log.Fatal("cant read output", err)
+	// read the output
+	execResult := utils.ExecResult{}
+	var outBuf, errBuf bytes.Buffer
+	outputDone := make(chan error)
+
+	go func() {
+		// StdCopy demultiplexes the stream into two buffers
+		_, err = stdcopy.StdCopy(&outBuf, &errBuf, resp.Reader)
+		outputDone <- err
+	}()
+
+	select {
+	case err := <-outputDone:
+		checkError(err)
+		break
+
+	case <-sdb.ctx.Done():
+		checkError(sdb.ctx.Err())
+		return execResult
 	}
-	return string(buf)
+
+	stdout, err := ioutil.ReadAll(&outBuf)
+	checkError(err)
+	stderr, err := ioutil.ReadAll(&errBuf)
+	checkError(err)
+
+	res, err := sdb.client.ContainerExecInspect(sdb.ctx, execID.ID)
+	checkError(err)
+
+	execResult.ExitCode = res.ExitCode
+	execResult.StdOut = string(stdout)
+	execResult.StdErr = string(stderr)
+	return execResult
 }
 
 func (sdb *SandboxExecutor) absoluteSrcPath() string {
@@ -141,7 +171,7 @@ func (sdb *SandboxExecutor) stopAndRemoveContainer() error {
 	return nil
 }
 
-func (sdb *SandboxExecutor) downloadOutput() {
+func (sdb *SandboxExecutor) downloadOutput() string {
 
 	outputFilePath := filepath.Join(sdb.outDir, sdb.outputFileName)
 	tarStream, _, err := sdb.client.CopyFromContainer(sdb.ctx, sdb.container.ID, outputFilePath)
@@ -153,8 +183,7 @@ func (sdb *SandboxExecutor) downloadOutput() {
 	buf := new(bytes.Buffer)
 	buf.ReadFrom(tr)
 
-	output := buf.String()
-	fmt.Println("output: ", output)
+	return buf.String()
 }
 
 func (sdb *SandboxExecutor) Compile() utils.Result {
@@ -167,13 +196,33 @@ func (sdb *SandboxExecutor) Compile() utils.Result {
 	compileCmd := sdb.compilerSettings.GetCompileCommand(srcDir, outDir)
 	fmtCmd := fmt.Sprintf("cd %s && timeout -s KILL %f %s", srcDir, sdb.limits.TimeLimit, compileCmd)
 	cmds := []string{"bash", "-c", fmtCmd}
-	compiler := sdb.runInsideDocker(cmds)
-	fmt.Println("compile message: ", compiler)
-	return utils.Result{
+	compilerResult := sdb.runInsideDocker(cmds)
+
+	res := utils.Result{
 		Verdict: utils.OK,
 		Time:    0,
 		Memory:  0,
-		Output:  "compiled",
+		Output:  compilerResult.StdOut,
+	}
+	if compilerResult.ExitCode != 0 {
+		res.Verdict = utils.CE
+		res.Output = compilerResult.StdErr
+	}
+	return res
+}
+
+func determineVerdict(result utils.ExecResult) utils.VerdictEnum {
+	switch result.ExitCode {
+	case 0:
+		return utils.OK
+	case 124:
+		return utils.TLE
+	case 137:
+		return utils.MLE
+	case 153:
+		return utils.OLE
+	default:
+		return utils.RE
 	}
 }
 
@@ -195,15 +244,16 @@ func (sdb *SandboxExecutor) Execute(io string) utils.Result {
 	cmds := []string{"bash", "-c", exeCmd}
 	res := sdb.runInsideDocker(cmds)
 
-	fmt.Println(res)
+	fmt.Println("Exit: ", res.StdErr)
 
 	sdb.downloadOutput()
-	return utils.Result{
-		Verdict: utils.OK,
+	result := utils.Result{
+		Verdict: determineVerdict(res),
 		Time:    0.5,
 		Memory:  232.07,
-		Output:  "hello aorld",
+		Output:  sdb.downloadOutput(),
 	}
+	return result
 }
 
 func (sdb *SandboxExecutor) Clear() {

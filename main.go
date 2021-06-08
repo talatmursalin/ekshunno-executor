@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"io/ioutil"
 
 	"github.com/talatmursalin/ekshunno-executor/xcore/compilers"
@@ -20,7 +21,10 @@ func main() {
 		*compilers.NewCCompilerSettings(),
 		*utils.NewLimit(2, 256, 100),
 	)
-	sb.Compile()
-	sb.Execute("")
+	ver := sb.Compile()
+	if ver.Verdict == utils.OK {
+		ver = sb.Execute("")
+	}
+	fmt.Println("Final veridt: ", ver)
 	sb.Clear()
 }
