@@ -1,6 +1,8 @@
 package executor
 
 import (
+	"fmt"
+
 	"github.com/talatmursalin/ekshunno-executor/xcore/compilers"
 	"github.com/talatmursalin/ekshunno-executor/xcore/utils"
 )
@@ -11,7 +13,7 @@ func GetExecutor(langId utils.LangEnum, src string, limits utils.Limit) Executor
 	case utils.C:
 		compilerSettings = compilers.NewCCompilerSettings()
 	default:
-		println("raise error")
+		panic(fmt.Sprintf("Executor not found %s", langId))
 	}
 	return NewSandboxExecutor(src, compilerSettings, limits)
 }
