@@ -8,6 +8,9 @@ import (
 	"io/ioutil"
 	"log"
 	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -226,6 +229,45 @@ func determineVerdict(result utils.ExecResult) utils.VerdictEnum {
 	}
 }
 
+func getExecutionTime(result string) float32 {
+	pattern := "real\t([0-9]+)m([0-9]+\\.[0-9]{3})s\n"
+	regex := regexp.MustCompile(pattern)
+	match := regex.FindStringSubmatch(result)
+	if len(match) == 0 {
+		return 0
+	}
+	t, err := strconv.ParseFloat(match[len(match)-1], 32)
+	if err != nil {
+		return 0
+	}
+	return float32(t)
+}
+
+func (sdb *SandboxExecutor) getContainerStats() string {
+	stats, err := sdb.client.ContainerStatsOneShot(sdb.ctx, sdb.container.ID)
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer stats.Body.Close()
+	content, _ := ioutil.ReadAll(stats.Body)
+	return string(content)
+}
+
+func getMemoryFromStat(result string) float32 {
+	pattern := "\"max_usage\":([0-9]+)"
+	regex := regexp.MustCompile(pattern)
+	match := regex.FindString(result)
+	if len(match) == 0 {
+		return 0
+	}
+	mStr := strings.Split(match, ":")[1]
+	m, err := strconv.ParseFloat(mStr, 32)
+	if err != nil {
+		return 0
+	}
+	return float32(m) / (1024 * 1024)
+}
+
 func (sdb *SandboxExecutor) prepareExecuteCommand() string {
 	command := fmt.Sprintf("set -o pipefail && ulimit -f %d && cd %s && time timeout %f %s < %s > %s",
 		int64(sdb.limits.OutputLimit*1024), //kb
@@ -243,14 +285,11 @@ func (sdb *SandboxExecutor) Execute(io string) utils.Result {
 	exeCmd := sdb.prepareExecuteCommand()
 	cmds := []string{"bash", "-c", exeCmd}
 	res := sdb.runInsideDocker(cmds)
-
-	fmt.Println("Exit: ", res.StdErr)
-
-	sdb.downloadOutput()
+	cStat := sdb.getContainerStats()
 	result := utils.Result{
 		Verdict: determineVerdict(res),
-		Time:    0.5,
-		Memory:  232.07,
+		Time:    getExecutionTime(res.StdErr),
+		Memory:  getMemoryFromStat(cStat),
 		Output:  sdb.downloadOutput(),
 	}
 	return result
