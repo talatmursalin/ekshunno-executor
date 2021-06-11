@@ -10,3 +10,22 @@ const (
 	GO     LangEnum = "go"
 	RUST   LangEnum = "rust"
 )
+
+func StringToLangId(langId string) LangEnum {
+	switch langId {
+	case "c":
+		return C
+	case "cpp":
+		return CPP
+	case "java":
+		return JAVA
+	case "python":
+		return PYTHON
+	case "go":
+		return GO
+	case "rust":
+		return RUST
+	default:
+		panic("could not find a langId match")
+	}
+}

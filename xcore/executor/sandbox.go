@@ -34,16 +34,16 @@ type SandboxExecutor struct {
 	container        container.ContainerCreateCreatedBody
 }
 
-func checkError(err error) {
+func goBoomOnError(msg string, err error) {
 	if err != nil {
-		panic(err)
+		log.Panicf("%s:%s", msg, err)
 	}
 }
 
 func (sdb *SandboxExecutor) createConatiner() {
 	sdb.ctx = context.Background()
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
-	checkError(err)
+	goBoomOnError("Failed to create docker client", err)
 	sdb.client = cli
 	resp, err := sdb.client.ContainerCreate(
 		sdb.ctx,
@@ -68,14 +68,14 @@ func (sdb *SandboxExecutor) createConatiner() {
 			},
 		},
 		nil, nil, "")
-	checkError(err)
+	goBoomOnError("Failed to create docker container", err)
 	sdb.container = resp
 	err = sdb.client.ContainerStart(sdb.ctx, resp.ID, types.ContainerStartOptions{})
-	checkError(err)
+	goBoomOnError("Failed to start docker container", err)
 }
 
 func (sdb *SandboxExecutor) runInsideDocker(cmds []string) utils.ExecResult {
-	fmt.Println("Exec : ", cmds)
+	log.Printf("Exec : %s", cmds)
 	conf := types.ExecConfig{
 		AttachStdout: false,
 		AttachStderr: true,
@@ -86,11 +86,11 @@ func (sdb *SandboxExecutor) runInsideDocker(cmds []string) utils.ExecResult {
 
 	config := types.ExecStartCheck{}
 	resp, err := sdb.client.ContainerExecAttach(sdb.ctx, execID.ID, config)
-	checkError(err)
+	goBoomOnError("Failed to attach ExecAttachment", err)
 	defer resp.Close()
 
 	err = sdb.client.ContainerExecStart(sdb.ctx, execID.ID, types.ExecStartCheck{})
-	checkError(err)
+	goBoomOnError("Failed to start docker exec", err)
 
 	// read the output
 	execResult := utils.ExecResult{}
@@ -105,21 +105,21 @@ func (sdb *SandboxExecutor) runInsideDocker(cmds []string) utils.ExecResult {
 
 	select {
 	case err := <-outputDone:
-		checkError(err)
+		goBoomOnError("Failed to read docker exit status", err)
 		break
 
 	case <-sdb.ctx.Done():
-		checkError(sdb.ctx.Err())
+		goBoomOnError("Failed to close docker exec channel", sdb.ctx.Err())
 		return execResult
 	}
 
 	stdout, err := ioutil.ReadAll(&outBuf)
-	checkError(err)
+	goBoomOnError("Failed to read docker stdout", err)
 	stderr, err := ioutil.ReadAll(&errBuf)
-	checkError(err)
+	goBoomOnError("Failed to read docker stderr", err)
 
 	res, err := sdb.client.ContainerExecInspect(sdb.ctx, execID.ID)
-	checkError(err)
+	goBoomOnError("Failed to inspect docker exec", err)
 
 	execResult.ExitCode = res.ExitCode
 	execResult.StdOut = string(stdout)
@@ -146,7 +146,7 @@ func (sdb *SandboxExecutor) createLocalEnv() {
 	utils.CreateLocalDir(sdb.dir)
 	// copy src file to work dir
 	err := utils.WriteFile(sdb.absoluteSrcPath(), sdb.src)
-	checkError(err)
+	goBoomOnError("Failed to write file", err)
 }
 
 func (sdb *SandboxExecutor) createDockerEnv() {
@@ -178,7 +178,7 @@ func (sdb *SandboxExecutor) downloadOutput() string {
 
 	outputFilePath := filepath.Join(sdb.outDir, sdb.outputFileName)
 	tarStream, _, err := sdb.client.CopyFromContainer(sdb.ctx, sdb.container.ID, outputFilePath)
-	checkError(err)
+	goBoomOnError("Failed to copy from container", err)
 	tr := tar.NewReader(tarStream)
 	if _, err := tr.Next(); err != nil {
 		panic(err)
@@ -246,7 +246,7 @@ func getExecutionTime(result string) float32 {
 func (sdb *SandboxExecutor) getContainerStats() string {
 	stats, err := sdb.client.ContainerStatsOneShot(sdb.ctx, sdb.container.ID)
 	if err != nil {
-		fmt.Println(err)
+		log.Printf("Failed to read conatiner stat: %s", err)
 	}
 	defer stats.Body.Close()
 	content, _ := ioutil.ReadAll(stats.Body)

@@ -13,4 +13,5 @@ require (
 	github.com/streadway/amqp v1.0.0 // indirect
 	golang.org/x/time v0.0.0-20210220033141-f8bda1e9f3ba // indirect
 	google.golang.org/grpc v1.38.0 // indirect
+	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
