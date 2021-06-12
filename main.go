@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/streadway/amqp"
 	"github.com/talatmursalin/ekshunno-executor/models"
@@ -14,11 +15,27 @@ import (
 	"gopkg.in/yaml.v2"
 )
 
+var (
+	rmqConnection   *amqp.Connection
+	receiverChannel *amqp.Channel
+	errorChannel    chan *amqp.Error
+	cfg             models.Config
+)
+
 func failOnError(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%s: %s", msg, err)
 		panic(err)
 	}
+}
+
+func loadConfig() {
+	f, err := os.Open("config.yml")
+	failOnError(err, "Failed to read config.yaml")
+	defer f.Close()
+	decoder := yaml.NewDecoder(f)
+	err = decoder.Decode(&cfg)
+	failOnError(err, "Failed to decode config")
 }
 
 func runSubmission(knock models.Knock) utils.Result {
@@ -34,36 +51,14 @@ func runSubmission(knock models.Knock) utils.Result {
 	return result
 }
 
-func setUpConsumer(conn *amqp.Connection, ch *amqp.Channel) (<-chan amqp.Delivery, error) {
-	q, err := ch.QueueDeclare(
-		"submission_queue", // name
-		true,               // durable
-		false,              // delete when unused
-		false,              // exclusive
-		false,              // no-wait
-		nil,                // arguments
-	)
-	failOnError(err, "Failed to declare a queue")
-
-	return ch.Consume(
-		q.Name, // queue
-		"",     // consumer
-		true,   // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
-}
-
-func pushMessageToQueue(conn *amqp.Connection, msg []byte, queue string) {
-	ch, err := conn.Channel()
+func pushMessageToQueue(msg []byte, queue string) {
+	ch, err := rmqConnection.Channel()
 	failOnError(err, "Failed to open a channel")
 	defer ch.Close()
 
 	q, err := ch.QueueDeclare(
 		queue, // name
-		true,  // durable
+		false, // durable
 		false, // delete when unused
 		false, // exclusive
 		false, // no-wait
@@ -84,43 +79,84 @@ func pushMessageToQueue(conn *amqp.Connection, msg []byte, queue string) {
 	log.Printf(" [x] Sent to %s", queue)
 }
 
-func loadConfig() models.Config {
-	f, err := os.Open("config.yml")
-	failOnError(err, "Failed to read config.yaml")
-	defer f.Close()
-	var cfg models.Config
-	decoder := yaml.NewDecoder(f)
-	err = decoder.Decode(&cfg)
-	failOnError(err, "Failed to decode config")
-	return cfg
+func setUpConsumer() (<-chan amqp.Delivery, error) {
+	q, err := receiverChannel.QueueDeclare(
+		cfg.Rabbitmq.Queue, // name
+		false,              // durable
+		false,              // delete when unused
+		false,              // exclusive
+		false,              // no-wait
+		nil,                // arguments
+	)
+	failOnError(err, "Failed to declare a queue")
+
+	return receiverChannel.Consume(
+		q.Name, // queue
+		"",     // consumer
+		true,   // auto-ack
+		false,  // exclusive
+		false,  // no-local
+		false,  // no-wait
+		nil,    // args
+	)
+}
+
+func setUpMessageQueue(url string) (<-chan amqp.Delivery, error) {
+
+	var err error
+	rmqConnection, err = amqp.Dial(url)
+	if err != nil {
+		return nil, err
+	}
+
+	receiverChannel, err = rmqConnection.Channel()
+	if err != nil {
+		return nil, err
+	}
+
+	closeChan := make(chan *amqp.Error, 1)
+	errorChannel = receiverChannel.NotifyClose(closeChan)
+
+	return setUpConsumer()
 }
 
 func main() {
-	cfg := loadConfig()
+	loadConfig()
 	rmqUrl := fmt.Sprintf("amqp://%s:%s@%s:%s/",
 		cfg.Rabbitmq.Username, cfg.Rabbitmq.Password,
 		cfg.Rabbitmq.Host, cfg.Rabbitmq.Port)
-	conn, err := amqp.Dial(rmqUrl)
-	failOnError(err, "Could not connect to RMQ")
-	defer conn.Close()
-	recChan, err := conn.Channel()
-	failOnError(err, "Could not connect to RMQ")
-	defer recChan.Close()
-	msgs, err := setUpConsumer(conn, recChan)
-	failOnError(err, "Failed to set up consumer")
+	msgs, err := setUpMessageQueue(rmqUrl)
+	failOnError(err, "Failed to setup message queue")
+	defer rmqConnection.Close()
+	defer receiverChannel.Close()
 	forever := make(chan bool)
 	go func() {
-		for d := range msgs {
-			knock := models.Knock{}
-			json.Unmarshal(d.Body, &knock)
-			result := runSubmission(knock)
-			log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
-				result.Verdict, result.Time, result.Memory)
-			resultByte, _ := json.Marshal(result)
-			pushMessageToQueue(conn, resultByte, knock.SubmissionRoom)
+		for {
+			select {
+			case e := <-errorChannel:
+				log.Printf("Connection failed: %s", e.Error())
+				for {
+					time.Sleep(5 * time.Second)
+					msgs, err = setUpMessageQueue(rmqUrl)
+					if err != nil {
+						log.Printf("Failed to reconnect: %s", err)
+						continue
+					}
+					log.Printf("[x] Reconnected to queue")
+					break
+				}
+			case msg := <-msgs:
+				knock := models.Knock{}
+				json.Unmarshal(msg.Body, &knock)
+				result := runSubmission(knock)
+				log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
+					result.Verdict, result.Time, result.Memory)
+				resultByte, _ := json.Marshal(result)
+				pushMessageToQueue(resultByte, knock.SubmissionRoom)
+			}
 		}
 	}()
 
-	log.Printf(" [*] Waiting for messages. To exit press CTRL+C")
+	log.Printf(" [x] Waiting for messages. To exit press CTRL+C")
 	<-forever
 }

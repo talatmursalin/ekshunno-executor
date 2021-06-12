@@ -6,5 +6,6 @@ type Config struct {
 		Port     string `rmq:"port"`
 		Username string `rmq:"username"`
 		Password string `rmq:"password"`
+		Queue    string `rmq:"queue"`
 	}
 }

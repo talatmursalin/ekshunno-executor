@@ -281,6 +281,7 @@ func (sdb *SandboxExecutor) prepareExecuteCommand() string {
 }
 
 func (sdb *SandboxExecutor) Execute(io string) utils.Result {
+	defer sdb.Clear()
 	sdb.writeInput(io)
 	exeCmd := sdb.prepareExecuteCommand()
 	cmds := []string{"bash", "-c", exeCmd}
