@@ -148,6 +148,7 @@ func main() {
 			case msg := <-msgs:
 				knock := models.Knock{}
 				json.Unmarshal(msg.Body, &knock)
+				knock.Validate()
 				result := runSubmission(knock)
 				log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
 					result.Verdict, result.Time, result.Memory)

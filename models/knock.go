@@ -11,3 +11,12 @@ type Knock struct {
 		Src      string
 	}
 }
+
+func (k *Knock) Validate() {
+	if k.Submission.Memory < 256 || k.Submission.Memory > 512 {
+		k.Submission.Memory = 512
+	}
+	if k.Submission.Time <= 0 || k.Submission.Time > 10 {
+		k.Submission.Time = 10
+	}
+}
