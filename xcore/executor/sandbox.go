@@ -275,6 +275,15 @@ func getMemoryFromStat(result string) float32 {
 	return float32(m) / (1024 * 1024)
 }
 
+func processedError(stderr, replace string) string {
+	// log.Printf("-->%s\n -->%s\n", stderr, replace)
+	err := strings.Split(stderr, "real\t")[0]
+	for _, val := range strings.Split(replace, " ") {
+		err = strings.ReplaceAll(err, val, "")
+	}
+	return err
+}
+
 func (sdb *SandboxExecutor) prepareExecuteCommand() string {
 	command := fmt.Sprintf("set -o pipefail && ulimit -f %d && cd %s && time timeout %f %s < %s > %s",
 		int64(sdb.limits.OutputLimit*1024), //kb
@@ -294,12 +303,18 @@ func (sdb *SandboxExecutor) Execute(io string) utils.Result {
 	cmds := []string{"bash", "-c", exeCmd}
 	res := sdb.runInsideDocker(cmds)
 	log.Printf("execute cmd exit code: %d", res.ExitCode)
+	// log.Printf("execute stderr: %s", res.StdErr)
+	output := ""
+	if res.ExitCode != 0 {
+		output = processedError(res.StdErr, exeCmd) + "\n\n"
+	}
+	output += sdb.downloadOutput()
 	cStat := sdb.getContainerStats()
 	result := utils.Result{
 		Verdict: determineVerdict(res),
 		Time:    getExecutionTime(res.StdErr),
 		Memory:  getMemoryFromStat(cStat),
-		Output:  sdb.downloadOutput(),
+		Output:  output,
 	}
 	return result
 }
