@@ -200,7 +200,7 @@ func (sdb *SandboxExecutor) Compile() utils.Result {
 	fmtCmd := fmt.Sprintf("cd %s && timeout -s KILL %f %s", srcDir, sdb.limits.TimeLimit, compileCmd)
 	cmds := []string{"bash", "-c", fmtCmd}
 	compilerResult := sdb.runInsideDocker(cmds)
-
+	log.Printf("compile cmd exit code: %d", compilerResult.ExitCode)
 	res := utils.Result{
 		Verdict: utils.OK,
 		Time:    0,
@@ -208,8 +208,15 @@ func (sdb *SandboxExecutor) Compile() utils.Result {
 		Output:  compilerResult.StdOut,
 	}
 	if compilerResult.ExitCode != 0 {
-		res.Verdict = utils.CE
-		res.Output = compilerResult.StdErr
+		log.Printf("compile error: %s - %s", compilerResult.StdOut, compilerResult.StdErr)
+		switch compilerResult.ExitCode {
+		case 4:
+			res.Verdict = utils.IE
+			res.Output = "Insufficient memory"
+		default:
+			res.Verdict = utils.CE
+			res.Output = compilerResult.StdErr
+		}
 	}
 	return res
 }
@@ -286,6 +293,7 @@ func (sdb *SandboxExecutor) Execute(io string) utils.Result {
 	exeCmd := sdb.prepareExecuteCommand()
 	cmds := []string{"bash", "-c", exeCmd}
 	res := sdb.runInsideDocker(cmds)
+	log.Printf("execute cmd exit code: %d", res.ExitCode)
 	cStat := sdb.getContainerStats()
 	result := utils.Result{
 		Verdict: determineVerdict(res),
@@ -308,8 +316,8 @@ func NewSandboxExecutor(src string, sett compilers.Compiler, limits utils.Limit)
 		src:              src,
 		inputFileName:    "input.in",
 		outputFileName:   "output.out",
-		dir:              utils.TempDirName("soj_"),
-		outDir:           utils.TempDirName("soj_out_"),
+		dir:              utils.TempDirName("es_"),
+		outDir:           utils.TempDirName("es_out_"),
 	}
 	sdb.createLocalEnv()
 	sdb.createConatiner()

@@ -1,5 +1,7 @@
 package utils
 
+import "errors"
+
 type LangEnum string
 
 const (
@@ -14,27 +16,27 @@ const (
 	RUST1   LangEnum = "rust1"
 )
 
-func StringToLangId(langId string) LangEnum {
+func StringToLangId(langId string) (LangEnum, error) {
 	switch langId {
 	case "c11":
-		return C11
+		return C11, nil
 	case "cpp11":
-		return CPP11
+		return CPP11, nil
 	case "cpp14":
-		return CPP14
+		return CPP14, nil
 	case "cpp17":
-		return CPP17
+		return CPP17, nil
 	case "java11":
-		return JAVA11
+		return JAVA11, nil
 	case "python3":
-		return PYTHON3
+		return PYTHON3, nil
 	case "go1":
-		return GO1
+		return GO1, nil
 	case "rust1":
-		return RUST1
+		return RUST1, nil
 	case "kotlin1":
-		return KOTLIN1
+		return KOTLIN1, nil
 	default:
-		panic("could not find a langId match")
+		return C11, errors.New("invalid language id")
 	}
 }
