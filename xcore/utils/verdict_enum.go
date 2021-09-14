@@ -8,6 +8,7 @@ const (
 	RE  VerdictEnum = "RE"
 	UE  VerdictEnum = "UE"
 	IE  VerdictEnum = "IE"
+	IS  VerdictEnum = "IS"
 	TLE VerdictEnum = "TLE"
 	MLE VerdictEnum = "MLE"
 	OLE VerdictEnum = "OLE"

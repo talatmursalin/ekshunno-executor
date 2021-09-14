@@ -39,8 +39,11 @@ func loadConfig() {
 }
 
 func runSubmission(knock models.Knock) utils.Result {
-	lang := utils.StringToLangId(knock.Submission.Lang)
-	limit := utils.NewLimit(knock.Submission.Time, knock.Submission.Memory, 10)
+	lang, _ := utils.StringToLangId(knock.Submission.Lang)
+	limit := utils.NewLimit(
+		knock.Submission.Time,
+		knock.Submission.Memory,
+		0.25) // .1/4mb | 256kb
 	sDec, _ := b64.StdEncoding.DecodeString(knock.Submission.Src)
 	executor := executor.GetExecutor(lang, string(sDec), *limit)
 
@@ -120,6 +123,18 @@ func setUpMessageQueue(url string) (<-chan amqp.Delivery, error) {
 	return setUpConsumer()
 }
 
+func getSubmissionErrorResult(err error) []byte {
+	knockErr := utils.Result{
+		Verdict: utils.IS,
+		Time:    0,
+		Memory:  0,
+		Output:  fmt.Sprintf("Invalid Submission: %s", err.Error()),
+	}
+	log.Printf(knockErr.Output)
+	errByte, _ := json.Marshal(knockErr)
+	return errByte
+}
+
 func main() {
 	loadConfig()
 	rmqUrl := fmt.Sprintf("amqp://%s:%s@%s:%s/",
@@ -146,14 +161,25 @@ func main() {
 					break
 				}
 			case msg := <-msgs:
+				var msgByte []byte
 				knock := models.Knock{}
-				json.Unmarshal(msg.Body, &knock)
-				knock.Validate()
-				result := runSubmission(knock)
-				log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
-					result.Verdict, result.Time, result.Memory)
-				resultByte, _ := json.Marshal(result)
-				pushMessageToQueue(resultByte, knock.SubmissionRoom)
+				err := json.Unmarshal(msg.Body, &knock)
+				if err != nil {
+					msgByte = getSubmissionErrorResult(err)
+				} else {
+					err := knock.Validate()
+					if err != nil {
+						msgByte = getSubmissionErrorResult(err)
+					} else {
+						result := runSubmission(knock)
+						log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
+							result.Verdict, result.Time, result.Memory)
+						msgByte, _ = json.Marshal(result)
+
+					}
+
+				}
+				pushMessageToQueue(msgByte, knock.SubmissionRoom)
 			}
 		}
 	}()

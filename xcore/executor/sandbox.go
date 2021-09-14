@@ -200,7 +200,7 @@ func (sdb *SandboxExecutor) Compile() utils.Result {
 	fmtCmd := fmt.Sprintf("cd %s && timeout -s KILL %f %s", srcDir, sdb.limits.TimeLimit, compileCmd)
 	cmds := []string{"bash", "-c", fmtCmd}
 	compilerResult := sdb.runInsideDocker(cmds)
-
+	log.Printf("compile cmd exit code: %d", compilerResult.ExitCode)
 	res := utils.Result{
 		Verdict: utils.OK,
 		Time:    0,
@@ -208,8 +208,15 @@ func (sdb *SandboxExecutor) Compile() utils.Result {
 		Output:  compilerResult.StdOut,
 	}
 	if compilerResult.ExitCode != 0 {
-		res.Verdict = utils.CE
-		res.Output = compilerResult.StdErr
+		log.Printf("compile error: %s - %s", compilerResult.StdOut, compilerResult.StdErr)
+		switch compilerResult.ExitCode {
+		case 4:
+			res.Verdict = utils.IE
+			res.Output = "Insufficient memory"
+		default:
+			res.Verdict = utils.CE
+			res.Output = compilerResult.StdErr
+		}
 	}
 	return res
 }
@@ -268,6 +275,15 @@ func getMemoryFromStat(result string) float32 {
 	return float32(m) / (1024 * 1024)
 }
 
+func processedError(stderr, replace string) string {
+	// log.Printf("-->%s\n -->%s\n", stderr, replace)
+	err := strings.Split(stderr, "real\t")[0]
+	for _, val := range strings.Split(replace, " ") {
+		err = strings.ReplaceAll(err, val, "")
+	}
+	return err
+}
+
 func (sdb *SandboxExecutor) prepareExecuteCommand() string {
 	command := fmt.Sprintf("set -o pipefail && ulimit -f %d && cd %s && time timeout %f %s < %s > %s",
 		int64(sdb.limits.OutputLimit*1024), //kb
@@ -286,12 +302,19 @@ func (sdb *SandboxExecutor) Execute(io string) utils.Result {
 	exeCmd := sdb.prepareExecuteCommand()
 	cmds := []string{"bash", "-c", exeCmd}
 	res := sdb.runInsideDocker(cmds)
+	log.Printf("execute cmd exit code: %d", res.ExitCode)
+	// log.Printf("execute stderr: %s", res.StdErr)
+	output := ""
+	if res.ExitCode != 0 {
+		output = processedError(res.StdErr, exeCmd) + "\n\n"
+	}
+	output += sdb.downloadOutput()
 	cStat := sdb.getContainerStats()
 	result := utils.Result{
 		Verdict: determineVerdict(res),
 		Time:    getExecutionTime(res.StdErr),
 		Memory:  getMemoryFromStat(cStat),
-		Output:  sdb.downloadOutput(),
+		Output:  output,
 	}
 	return result
 }
@@ -308,8 +331,8 @@ func NewSandboxExecutor(src string, sett compilers.Compiler, limits utils.Limit)
 		src:              src,
 		inputFileName:    "input.in",
 		outputFileName:   "output.out",
-		dir:              utils.TempDirName("soj_"),
-		outDir:           utils.TempDirName("soj_out_"),
+		dir:              utils.TempDirName("es_"),
+		outDir:           utils.TempDirName("es_out_"),
 	}
 	sdb.createLocalEnv()
 	sdb.createConatiner()

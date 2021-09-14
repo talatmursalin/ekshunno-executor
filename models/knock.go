@@ -1,5 +1,7 @@
 package models
 
+import "github.com/talatmursalin/ekshunno-executor/xcore/utils"
+
 type Knock struct {
 	SubmissionRoom string
 	Submission     struct {
@@ -12,11 +14,16 @@ type Knock struct {
 	}
 }
 
-func (k *Knock) Validate() {
-	if k.Submission.Memory < 256 || k.Submission.Memory > 512 {
-		k.Submission.Memory = 512
+func (k *Knock) Validate() error {
+	if k.Submission.Memory < 64 || k.Submission.Memory > 512 {
+		k.Submission.Memory = 256
 	}
-	if k.Submission.Time <= 0 || k.Submission.Time > 10 {
-		k.Submission.Time = 10
+	if k.Submission.Time <= 0 || k.Submission.Time > 3 {
+		k.Submission.Time = 3
 	}
+	if _, err := utils.StringToLangId(k.Submission.Lang); err != nil {
+		return err
+	}
+	// validate compiler
+	return nil
 }
