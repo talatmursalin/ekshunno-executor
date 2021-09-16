@@ -17,13 +17,15 @@ import (
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/talatmursalin/ekshunno-executor/customenums"
+	"github.com/talatmursalin/ekshunno-executor/models"
 	"github.com/talatmursalin/ekshunno-executor/xcore/compilers"
-	"github.com/talatmursalin/ekshunno-executor/xcore/utils"
+	"github.com/talatmursalin/ekshunno-executor/xcore/exutils"
 )
 
 type SandboxExecutor struct {
 	compilerSettings compilers.Compiler
-	limits           utils.Limit
+	limits           models.Limit
 	src              string
 	inputFileName    string
 	outputFileName   string
@@ -74,7 +76,7 @@ func (sdb *SandboxExecutor) createConatiner() {
 	goBoomOnError("Failed to start docker container", err)
 }
 
-func (sdb *SandboxExecutor) runInsideDocker(cmds []string) utils.ExecResult {
+func (sdb *SandboxExecutor) runInsideDocker(cmds []string) models.ExecResult {
 	log.Printf("Exec : %s", cmds)
 	conf := types.ExecConfig{
 		AttachStdout: false,
@@ -93,7 +95,7 @@ func (sdb *SandboxExecutor) runInsideDocker(cmds []string) utils.ExecResult {
 	goBoomOnError("Failed to start docker exec", err)
 
 	// read the output
-	execResult := utils.ExecResult{}
+	execResult := models.ExecResult{}
 	var outBuf, errBuf bytes.Buffer
 	outputDone := make(chan error)
 
@@ -139,13 +141,13 @@ func (sdb *SandboxExecutor) copySrcToOutDir() {
 
 func (sdb *SandboxExecutor) writeInput(input string) {
 	path := filepath.Join(sdb.dir, sdb.inputFileName)
-	utils.WriteFile(path, input)
+	exutils.WriteFile(path, input)
 }
 
 func (sdb *SandboxExecutor) createLocalEnv() {
-	utils.CreateLocalDir(sdb.dir)
+	exutils.CreateLocalDir(sdb.dir)
 	// copy src file to work dir
-	err := utils.WriteFile(sdb.absoluteSrcPath(), sdb.src)
+	err := exutils.WriteFile(sdb.absoluteSrcPath(), sdb.src)
 	goBoomOnError("Failed to write file", err)
 }
 
@@ -189,7 +191,7 @@ func (sdb *SandboxExecutor) downloadOutput() string {
 	return buf.String()
 }
 
-func (sdb *SandboxExecutor) Compile() utils.Result {
+func (sdb *SandboxExecutor) Compile() models.Result {
 	srcDir := sdb.dir
 	outDir := sdb.outDir
 	if sdb.compilerSettings.IsInterpreter() {
@@ -201,8 +203,8 @@ func (sdb *SandboxExecutor) Compile() utils.Result {
 	cmds := []string{"bash", "-c", fmtCmd}
 	compilerResult := sdb.runInsideDocker(cmds)
 	log.Printf("compile cmd exit code: %d", compilerResult.ExitCode)
-	res := utils.Result{
-		Verdict: utils.OK,
+	res := models.Result{
+		Verdict: customenums.OK,
 		Time:    0,
 		Memory:  0,
 		Output:  compilerResult.StdOut,
@@ -211,28 +213,28 @@ func (sdb *SandboxExecutor) Compile() utils.Result {
 		log.Printf("compile error: %s - %s", compilerResult.StdOut, compilerResult.StdErr)
 		switch compilerResult.ExitCode {
 		case 4:
-			res.Verdict = utils.IE
+			res.Verdict = customenums.IE
 			res.Output = "Insufficient memory"
 		default:
-			res.Verdict = utils.CE
+			res.Verdict = customenums.CE
 			res.Output = compilerResult.StdErr
 		}
 	}
 	return res
 }
 
-func determineVerdict(result utils.ExecResult) utils.VerdictEnum {
+func determineVerdict(result models.ExecResult) customenums.VerdictEnum {
 	switch result.ExitCode {
 	case 0:
-		return utils.OK
+		return customenums.OK
 	case 124:
-		return utils.TLE
+		return customenums.TLE
 	case 137:
-		return utils.MLE
+		return customenums.MLE
 	case 153:
-		return utils.OLE
+		return customenums.OLE
 	default:
-		return utils.RE
+		return customenums.RE
 	}
 }
 
@@ -296,7 +298,7 @@ func (sdb *SandboxExecutor) prepareExecuteCommand() string {
 	return command
 }
 
-func (sdb *SandboxExecutor) Execute(io string) utils.Result {
+func (sdb *SandboxExecutor) Execute(io string) models.Result {
 	defer sdb.Clear()
 	sdb.writeInput(io)
 	exeCmd := sdb.prepareExecuteCommand()
@@ -310,7 +312,7 @@ func (sdb *SandboxExecutor) Execute(io string) utils.Result {
 	}
 	output += sdb.downloadOutput()
 	cStat := sdb.getContainerStats()
-	result := utils.Result{
+	result := models.Result{
 		Verdict: determineVerdict(res),
 		Time:    getExecutionTime(res.StdErr),
 		Memory:  getMemoryFromStat(cStat),
@@ -321,18 +323,18 @@ func (sdb *SandboxExecutor) Execute(io string) utils.Result {
 
 func (sdb *SandboxExecutor) Clear() {
 	sdb.stopAndRemoveContainer()
-	utils.DeleteLocalDir(sdb.dir)
+	exutils.DeleteLocalDir(sdb.dir)
 }
 
-func NewSandboxExecutor(src string, sett compilers.Compiler, limits utils.Limit) *SandboxExecutor {
+func NewSandboxExecutor(src string, sett compilers.Compiler, limits models.Limit) *SandboxExecutor {
 	sdb := SandboxExecutor{
 		compilerSettings: sett,
 		limits:           limits,
 		src:              src,
 		inputFileName:    "input.in",
 		outputFileName:   "output.out",
-		dir:              utils.TempDirName("es_"),
-		outDir:           utils.TempDirName("es_out_"),
+		dir:              exutils.TempDirName("es_"),
+		outDir:           exutils.TempDirName("es_out_"),
 	}
 	sdb.createLocalEnv()
 	sdb.createConatiner()

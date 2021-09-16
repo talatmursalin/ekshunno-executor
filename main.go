@@ -9,38 +9,45 @@ import (
 	"time"
 
 	"github.com/streadway/amqp"
+	"github.com/talatmursalin/ekshunno-executor/commonutils"
+	"github.com/talatmursalin/ekshunno-executor/customenums"
 	"github.com/talatmursalin/ekshunno-executor/models"
 	"github.com/talatmursalin/ekshunno-executor/xcore/executor"
-	"github.com/talatmursalin/ekshunno-executor/xcore/utils"
 	"gopkg.in/yaml.v2"
 )
 
-var (
-	rmqConnection   *amqp.Connection
-	receiverChannel *amqp.Channel
-	errorChannel    chan *amqp.Error
-	cfg             models.Config
-)
-
-func failOnError(err error, msg string) {
-	if err != nil {
-		log.Fatalf("%s: %s", msg, err)
-		panic(err)
-	}
+type workerPoolMsg struct {
+	msg  bool
+	from chan bool
 }
+
+type verdictMessage struct {
+	msg  []byte
+	room string
+}
+
+var (
+	rmqConnection     *amqp.Connection
+	receiverChannel   *amqp.Channel
+	errorChannel      chan *amqp.Error
+	cfg               models.Config
+	workerPoolChannel chan workerPoolMsg
+	// workerDoneChannels []chan bool
+	verdictChannel chan verdictMessage
+)
 
 func loadConfig() {
 	f, err := os.Open("config.yml")
-	failOnError(err, "Failed to read config.yaml")
+	commonutils.ExitOnError(err, "Failed to read config.yaml")
 	defer f.Close()
 	decoder := yaml.NewDecoder(f)
 	err = decoder.Decode(&cfg)
-	failOnError(err, "Failed to decode config")
+	commonutils.ExitOnError(err, "Failed to decode config")
 }
 
-func runSubmission(knock models.Knock) utils.Result {
-	lang, _ := utils.StringToLangId(knock.Submission.Lang)
-	limit := utils.NewLimit(
+func executeSubmission(knock models.Knock) models.Result {
+	lang, _ := customenums.StringToLangId(knock.Submission.Lang)
+	limit := models.NewLimit(
 		knock.Submission.Time,
 		knock.Submission.Memory,
 		0.25) // .1/4mb | 256kb
@@ -48,41 +55,53 @@ func runSubmission(knock models.Knock) utils.Result {
 	executor := executor.GetExecutor(lang, string(sDec), *limit)
 
 	result := executor.Compile()
-	if result.Verdict == utils.OK {
+	if result.Verdict == customenums.OK {
 		result = executor.Execute(knock.Submission.Input)
 	}
 	return result
 }
 
-func pushMessageToQueue(msg []byte, queue string) {
-	ch, err := rmqConnection.Channel()
-	failOnError(err, "Failed to open a channel")
-	defer ch.Close()
-
-	q, err := ch.QueueDeclare(
-		queue, // name
-		false, // durable
-		false, // delete when unused
-		false, // exclusive
-		false, // no-wait
-		nil,   // arguments
-	)
-	failOnError(err, "Failed to declare a queue")
-
-	err = ch.Publish(
-		"",     // exchange
-		q.Name, // routing key
-		false,  // mandatory
-		false,  // immediate
-		amqp.Publishing{
-			ContentType: "text/plain",
-			Body:        []byte(msg),
-		})
-	failOnError(err, "Failed to publish a message")
-	log.Printf(" [x] Sent to %s", queue)
+func runSubmission(knock models.Knock, done chan bool) {
+	result := executeSubmission(knock)
+	log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
+		result.Verdict, result.Time, result.Memory)
+	verByte, _ := json.Marshal(result)
+	verdictChannel <- verdictMessage{msg: verByte, room: knock.SubmissionRoom}
+	done <- true
 }
 
-func setUpConsumer() (<-chan amqp.Delivery, error) {
+func publishVerdict() {
+	for {
+		msg := <-verdictChannel
+		ch, err := rmqConnection.Channel()
+		commonutils.ExitOnError(err, "Failed to open a channel")
+		// defer ch.Close()
+
+		q, err := ch.QueueDeclare(
+			msg.room, // name
+			false,    // durable
+			false,    // delete when unused
+			false,    // exclusive
+			false,    // no-wait
+			nil,      // arguments
+		)
+		commonutils.ExitOnError(err, "Failed to declare a queue")
+
+		err = ch.Publish(
+			"",     // exchange
+			q.Name, // routing key
+			false,  // mandatory
+			false,  // immediate
+			amqp.Publishing{
+				ContentType: "text/plain",
+				Body:        []byte(msg.msg),
+			})
+		commonutils.ExitOnError(err, "Failed to publish a message")
+		log.Printf(" [x] Sent to %s", msg.room)
+	}
+}
+
+func initConsumer() (<-chan amqp.Delivery, error) {
 	q, err := receiverChannel.QueueDeclare(
 		cfg.Rabbitmq.Queue, // name
 		false,              // durable
@@ -91,7 +110,7 @@ func setUpConsumer() (<-chan amqp.Delivery, error) {
 		false,              // no-wait
 		nil,                // arguments
 	)
-	failOnError(err, "Failed to declare a queue")
+	commonutils.ExitOnError(err, "Failed to declare a queue")
 
 	return receiverChannel.Consume(
 		q.Name, // queue
@@ -104,7 +123,7 @@ func setUpConsumer() (<-chan amqp.Delivery, error) {
 	)
 }
 
-func setUpMessageQueue(url string) (<-chan amqp.Delivery, error) {
+func initReceiveChannel(url string) (<-chan amqp.Delivery, error) {
 
 	var err error
 	rmqConnection, err = amqp.Dial(url)
@@ -120,12 +139,52 @@ func setUpMessageQueue(url string) (<-chan amqp.Delivery, error) {
 	closeChan := make(chan *amqp.Error, 1)
 	errorChannel = receiverChannel.NotifyClose(closeChan)
 
-	return setUpConsumer()
+	return initConsumer()
+}
+
+func initVeridctChannel() {
+	verdictChannel = make(chan verdictMessage)
+	go publishVerdict()
+}
+
+func initWorkerPool(n int) {
+	workerPoolChannel = make(chan workerPoolMsg, n)
+	// workerDoneChannels = make([]chan bool, n)
+	for i := 0; i < n; i++ {
+		ch := make(chan bool, 1)
+		ch <- true
+		go func(ch chan bool) {
+			for {
+				msg := <-ch
+				workerPoolChannel <- workerPoolMsg{msg: msg, from: ch}
+			}
+		}(ch)
+		// log.Println("worker:", i)
+		// workerDoneChannels[i] <- true
+	}
+}
+
+func retryConnection(url string) (<-chan amqp.Delivery, error) {
+	cnt := 0
+	for {
+		cnt += 1
+		time.Sleep(5 * time.Second)
+		msgs, err := initReceiveChannel(url)
+		if err != nil {
+			if cnt > 720 {
+				commonutils.ExitOnError(err, "Retry limit exceeded")
+			}
+			log.Printf("Failed to reconnect: %s", err)
+			continue
+		}
+		log.Printf("[x] Reconnected to queue")
+		return msgs, err
+	}
 }
 
 func getSubmissionErrorResult(err error) []byte {
-	knockErr := utils.Result{
-		Verdict: utils.IS,
+	knockErr := models.Result{
+		Verdict: customenums.IS,
 		Time:    0,
 		Memory:  0,
 		Output:  fmt.Sprintf("Invalid Submission: %s", err.Error()),
@@ -135,51 +194,45 @@ func getSubmissionErrorResult(err error) []byte {
 	return errByte
 }
 
-func main() {
-	loadConfig()
-	rmqUrl := fmt.Sprintf("amqp://%s:%s@%s:%s/",
+func getRmqURL() string {
+	return fmt.Sprintf("amqp://%s:%s@%s:%s/",
 		cfg.Rabbitmq.Username, cfg.Rabbitmq.Password,
 		cfg.Rabbitmq.Host, cfg.Rabbitmq.Port)
-	msgs, err := setUpMessageQueue(rmqUrl)
-	failOnError(err, "Failed to setup message queue")
+}
+
+func main() {
+	loadConfig()
+	rmqUrl := getRmqURL()
+	msgs, err := initReceiveChannel(rmqUrl)
+	commonutils.ExitOnError(err, "Failed to setup message queue")
 	defer rmqConnection.Close()
 	defer receiverChannel.Close()
+	initWorkerPool(cfg.General.Concurrency) // max three concurrent judge process
+	initVeridctChannel()
 	forever := make(chan bool)
 	go func() {
 		for {
 			select {
 			case e := <-errorChannel:
-				log.Printf("Connection failed: %s", e.Error())
-				for {
-					time.Sleep(5 * time.Second)
-					msgs, err = setUpMessageQueue(rmqUrl)
-					if err != nil {
-						log.Printf("Failed to reconnect: %s", err)
-						continue
-					}
-					log.Printf("[x] Reconnected to queue")
-					break
-				}
+				commonutils.ReportOnError(e, "Connection failed")
+				msgs, err = retryConnection(rmqUrl)
 			case msg := <-msgs:
-				var msgByte []byte
 				knock := models.Knock{}
 				err := json.Unmarshal(msg.Body, &knock)
 				if err != nil {
-					msgByte = getSubmissionErrorResult(err)
+					subErr := getSubmissionErrorResult(err)
+					commonutils.ReportOnError(err, string(subErr))
 				} else {
 					err := knock.Validate()
 					if err != nil {
-						msgByte = getSubmissionErrorResult(err)
+						go publishVerdict()
+						getSubmissionErrorResult(err)
 					} else {
-						result := runSubmission(knock)
-						log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
-							result.Verdict, result.Time, result.Memory)
-						msgByte, _ = json.Marshal(result)
-
+						freeWorker := <-workerPoolChannel
+						go runSubmission(knock, freeWorker.from)
 					}
 
 				}
-				pushMessageToQueue(msgByte, knock.SubmissionRoom)
 			}
 		}
 	}()

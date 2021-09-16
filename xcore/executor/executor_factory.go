@@ -3,30 +3,31 @@ package executor
 import (
 	"log"
 
+	"github.com/talatmursalin/ekshunno-executor/customenums"
+	"github.com/talatmursalin/ekshunno-executor/models"
 	"github.com/talatmursalin/ekshunno-executor/xcore/compilers"
-	"github.com/talatmursalin/ekshunno-executor/xcore/utils"
 )
 
-func GetExecutor(langId utils.LangEnum, src string, limits utils.Limit) Executor {
+func GetExecutor(langId customenums.LangEnum, src string, limits models.Limit) Executor {
 	var compilerSettings compilers.Compiler
 	switch langId {
-	case utils.C11:
+	case customenums.C11:
 		compilerSettings = compilers.C11CompilerSettings{}
-	case utils.CPP11:
+	case customenums.CPP11:
 		compilerSettings = compilers.Cpp11CompilerSettings{}
-	case utils.CPP14:
+	case customenums.CPP14:
 		compilerSettings = compilers.Cpp14CompilerSettings{}
-	case utils.CPP17:
+	case customenums.CPP17:
 		compilerSettings = compilers.Cpp17CompilerSettings{}
-	case utils.JAVA11:
+	case customenums.JAVA11:
 		compilerSettings = compilers.Java11CompilerSettings{}
-	case utils.KOTLIN1:
+	case customenums.KOTLIN1:
 		compilerSettings = compilers.Kotlin1CompilerSettings{}
-	case utils.GO1:
+	case customenums.GO1:
 		compilerSettings = compilers.Go1CompilerSettings{}
-	case utils.RUST1:
+	case customenums.RUST1:
 		compilerSettings = compilers.Rust1CompilerSettings{}
-	case utils.PYTHON3:
+	case customenums.PYTHON3:
 		compilerSettings = compilers.Python3CompilerSettings{}
 	default:
 		log.Panicf("Executor not found %s", langId)
