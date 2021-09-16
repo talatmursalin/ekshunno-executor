@@ -1,10 +1,10 @@
 package executor
 
 import (
-	"github.com/talatmursalin/ekshunno-executor/xcore/utils"
+	"github.com/talatmursalin/ekshunno-executor/models"
 )
 
 type Executor interface {
-	Compile() utils.Result
-	Execute(io string) utils.Result
+	Compile() models.Result
+	Execute(io string) models.Result
 }

@@ -8,4 +8,7 @@ type Config struct {
 		Password string `rmq:"password"`
 		Queue    string `rmq:"queue"`
 	}
+	General struct {
+		Concurrency int
+	}
 }

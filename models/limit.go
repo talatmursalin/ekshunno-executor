@@ -1,4 +1,4 @@
-package utils
+package models
 
 type Limit struct {
 	TimeLimit   float32

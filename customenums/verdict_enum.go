@@ -1,4 +1,4 @@
-package utils
+package customenums
 
 type VerdictEnum string
 

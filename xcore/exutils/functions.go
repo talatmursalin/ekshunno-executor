@@ -1,4 +1,4 @@
-package utils
+package exutils
 
 import (
 	"crypto/rand"
