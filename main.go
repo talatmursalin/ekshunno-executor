@@ -4,16 +4,14 @@ import (
 	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
-	"time"
-
 	"github.com/streadway/amqp"
 	"github.com/talatmursalin/ekshunno-executor/commonutils"
+	"github.com/talatmursalin/ekshunno-executor/config"
 	"github.com/talatmursalin/ekshunno-executor/customenums"
 	"github.com/talatmursalin/ekshunno-executor/models"
 	"github.com/talatmursalin/ekshunno-executor/xcore/executor"
-	"gopkg.in/yaml.v2"
+	"log"
+	"time"
 )
 
 type workerPoolMsg struct {
@@ -30,20 +28,10 @@ var (
 	rmqConnection     *amqp.Connection
 	receiverChannel   *amqp.Channel
 	errorChannel      chan *amqp.Error
-	cfg               models.Config
 	workerPoolChannel chan workerPoolMsg
 	// workerDoneChannels []chan bool
 	verdictChannel chan verdictMessage
 )
-
-func loadConfig() {
-	f, err := os.Open("config.yml")
-	commonutils.ExitOnError(err, "Failed to read config.yaml")
-	defer f.Close()
-	decoder := yaml.NewDecoder(f)
-	err = decoder.Decode(&cfg)
-	commonutils.ExitOnError(err, "Failed to decode config")
-}
 
 func executeSubmission(knock models.Knock) models.Result {
 	lang, _ := customenums.StringToLangId(knock.Submission.Lang)
@@ -103,12 +91,12 @@ func publishVerdict() {
 
 func initConsumer() (<-chan amqp.Delivery, error) {
 	q, err := receiverChannel.QueueDeclare(
-		cfg.Rabbitmq.Queue, // name
-		false,              // durable
-		false,              // delete when unused
-		false,              // exclusive
-		false,              // no-wait
-		nil,                // arguments
+		AppConfig.Rabbitmq.Queue, // name
+		false,                    // durable
+		false,                    // delete when unused
+		false,                    // exclusive
+		false,                    // no-wait
+		nil,                      // arguments
 	)
 	commonutils.ExitOnError(err, "Failed to declare a queue")
 
@@ -194,20 +182,17 @@ func getSubmissionErrorResult(err error) []byte {
 	return errByte
 }
 
-func getRmqURL() string {
-	return fmt.Sprintf("amqp://%s:%s@%s:%s/",
-		cfg.Rabbitmq.Username, cfg.Rabbitmq.Password,
-		cfg.Rabbitmq.Host, cfg.Rabbitmq.Port)
-}
+var AppConfig *config.Config
 
 func main() {
-	loadConfig()
-	rmqUrl := getRmqURL()
+	AppConfig = config.LoadConfig("./config.yml")
+
+	rmqUrl := config.RmqUrl(AppConfig)
 	msgs, err := initReceiveChannel(rmqUrl)
 	commonutils.ExitOnError(err, "Failed to setup message queue")
 	defer rmqConnection.Close()
 	defer receiverChannel.Close()
-	initWorkerPool(cfg.General.Concurrency) // max three concurrent judge process
+	initWorkerPool(AppConfig.Concurrency) // max three concurrent judge process
 	initVeridctChannel()
 	forever := make(chan bool)
 	go func() {
