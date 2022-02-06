@@ -4,14 +4,14 @@ import (
 	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
-	"github.com/streadway/amqp"
 	"github.com/talatmursalin/ekshunno-executor/commonutils"
 	"github.com/talatmursalin/ekshunno-executor/config"
 	"github.com/talatmursalin/ekshunno-executor/customenums"
 	"github.com/talatmursalin/ekshunno-executor/models"
+	"github.com/talatmursalin/ekshunno-executor/publisher"
+	"github.com/talatmursalin/ekshunno-executor/receiver"
 	"github.com/talatmursalin/ekshunno-executor/xcore/executor"
 	"log"
-	"time"
 )
 
 type workerPoolMsg struct {
@@ -25,15 +25,12 @@ type verdictMessage struct {
 }
 
 var (
-	rmqConnection     *amqp.Connection
-	receiverChannel   *amqp.Channel
-	errorChannel      chan *amqp.Error
-	workerPoolChannel chan workerPoolMsg
 	// workerDoneChannels []chan bool
-	verdictChannel chan verdictMessage
+	verdictChannel    chan verdictMessage
+	workerPoolChannel chan workerPoolMsg
 )
 
-func executeSubmission(knock models.Knock) models.Result {
+func executeSubmission(knock *models.Knock) models.Result {
 	lang, _ := customenums.StringToLangId(knock.Submission.Lang)
 	limit := models.NewLimit(
 		knock.Submission.Time,
@@ -49,8 +46,9 @@ func executeSubmission(knock models.Knock) models.Result {
 	return result
 }
 
-func runSubmission(knock models.Knock, done chan bool) {
+func runSubmission(knock *models.Knock, publisherChannel chan<- *models.Result, done chan<- bool) {
 	result := executeSubmission(knock)
+	publisherChannel <- &result
 	log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
 		result.Verdict, result.Time, result.Memory)
 	verByte, _ := json.Marshal(result)
@@ -58,82 +56,42 @@ func runSubmission(knock models.Knock, done chan bool) {
 	done <- true
 }
 
-func publishVerdict() {
-	for {
-		msg := <-verdictChannel
-		ch, err := rmqConnection.Channel()
-		commonutils.ExitOnError(err, "Failed to open a channel")
-		// defer ch.Close()
+//
+//func publishVerdict() {
+//	for {
+//		msg := <-verdictChannel
+//		ch, err := rmqConnection.Channel()
+//		commonutils.ExitOnError(err, "Failed to open a channel")
+//		// defer ch.Close()
+//
+//		q, err := ch.QueueDeclare(
+//			msg.room, // name
+//			false,    // durable
+//			false,    // delete when unused
+//			false,    // exclusive
+//			false,    // no-wait
+//			nil,      // arguments
+//		)
+//		commonutils.ExitOnError(err, "Failed to declare a queue")
+//
+//		err = ch.Publish(
+//			"",     // exchange
+//			q.Name, // routing key
+//			false,  // mandatory
+//			false,  // immediate
+//			amqp.Publishing{
+//				ContentType: "text/plain",
+//				Body:        []byte(msg.msg),
+//			})
+//		commonutils.ExitOnError(err, "Failed to publish a message")
+//		log.Printf(" [x] Sent to %s", msg.room)
+//	}
+//}
 
-		q, err := ch.QueueDeclare(
-			msg.room, // name
-			false,    // durable
-			false,    // delete when unused
-			false,    // exclusive
-			false,    // no-wait
-			nil,      // arguments
-		)
-		commonutils.ExitOnError(err, "Failed to declare a queue")
-
-		err = ch.Publish(
-			"",     // exchange
-			q.Name, // routing key
-			false,  // mandatory
-			false,  // immediate
-			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        []byte(msg.msg),
-			})
-		commonutils.ExitOnError(err, "Failed to publish a message")
-		log.Printf(" [x] Sent to %s", msg.room)
-	}
-}
-
-func initConsumer() (<-chan amqp.Delivery, error) {
-	q, err := receiverChannel.QueueDeclare(
-		AppConfig.Rabbitmq.Queue, // name
-		false,                    // durable
-		false,                    // delete when unused
-		false,                    // exclusive
-		false,                    // no-wait
-		nil,                      // arguments
-	)
-	commonutils.ExitOnError(err, "Failed to declare a queue")
-
-	return receiverChannel.Consume(
-		q.Name, // queue
-		"",     // consumer
-		true,   // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
-}
-
-func initReceiveChannel(url string) (<-chan amqp.Delivery, error) {
-
-	var err error
-	rmqConnection, err = amqp.Dial(url)
-	if err != nil {
-		return nil, err
-	}
-
-	receiverChannel, err = rmqConnection.Channel()
-	if err != nil {
-		return nil, err
-	}
-
-	closeChan := make(chan *amqp.Error, 1)
-	errorChannel = receiverChannel.NotifyClose(closeChan)
-
-	return initConsumer()
-}
-
-func initVeridctChannel() {
-	verdictChannel = make(chan verdictMessage)
-	go publishVerdict()
-}
+//func initVeridctChannel() {
+//	verdictChannel = make(chan verdictMessage)
+//	go publishVerdict()
+//}
 
 func initWorkerPool(n int) {
 	workerPoolChannel = make(chan workerPoolMsg, n)
@@ -152,23 +110,23 @@ func initWorkerPool(n int) {
 	}
 }
 
-func retryConnection(url string) (<-chan amqp.Delivery, error) {
-	cnt := 0
-	for {
-		cnt += 1
-		time.Sleep(5 * time.Second)
-		msgs, err := initReceiveChannel(url)
-		if err != nil {
-			if cnt > 720 {
-				commonutils.ExitOnError(err, "Retry limit exceeded")
-			}
-			log.Printf("Failed to reconnect: %s", err)
-			continue
-		}
-		log.Printf("[x] Reconnected to queue")
-		return msgs, err
-	}
-}
+//func retryConnection(url string) (<-chan amqp.Delivery, error) {
+//	cnt := 0
+//	for {
+//		cnt += 1
+//		time.Sleep(5 * time.Second)
+//		msgs, err := initReceiveChannel(url)
+//		if err != nil {
+//			if cnt > 720 {
+//				commonutils.ExitOnError(err, "Retry limit exceeded")
+//			}
+//			log.Printf("Failed to reconnect: %s", err)
+//			continue
+//		}
+//		log.Printf("[x] Reconnected to queue")
+//		return msgs, err
+//	}
+//}
 
 func getSubmissionErrorResult(err error) []byte {
 	knockErr := models.Result{
@@ -185,43 +143,46 @@ func getSubmissionErrorResult(err error) []byte {
 var AppConfig *config.Config
 
 func main() {
+	var err error
 	AppConfig = config.LoadConfig("./config.yml")
 
-	rmqUrl := config.RmqUrl(AppConfig)
-	msgs, err := initReceiveChannel(rmqUrl)
+	// setup receiver
+	var msgChan <-chan *models.Knock
+	var errorChannel <-chan error
+	msgChan, errorChannel, err = receiver.GetReceivingChannel(AppConfig)
+	defer receiver.CloseReceiver(AppConfig)
 	commonutils.ExitOnError(err, "Failed to setup message queue")
-	defer rmqConnection.Close()
-	defer receiverChannel.Close()
+
+	// setup publisher
+	publishChannel := make(chan *models.Result)
+	publisher.ConfigurePublisher(AppConfig, publishChannel)
+
+	//
 	initWorkerPool(AppConfig.Concurrency) // max three concurrent judge process
-	initVeridctChannel()
+	//initVeridctChannel()
 	forever := make(chan bool)
 	go func() {
 		for {
 			select {
 			case e := <-errorChannel:
 				commonutils.ReportOnError(e, "Connection failed")
-				msgs, err = retryConnection(rmqUrl)
-			case msg := <-msgs:
-				knock := models.Knock{}
-				err := json.Unmarshal(msg.Body, &knock)
+				msgChan, errorChannel, err = receiver.GetReceivingChannel(AppConfig)
+				commonutils.ExitOnError(err, "Failed to setup message queue :: retry")
+			case knock := <-msgChan:
+				err := knock.Validate()
 				if err != nil {
-					subErr := getSubmissionErrorResult(err)
-					commonutils.ReportOnError(err, string(subErr))
+					//go publishVerdict()
+					getSubmissionErrorResult(err)
 				} else {
-					err := knock.Validate()
-					if err != nil {
-						go publishVerdict()
-						getSubmissionErrorResult(err)
-					} else {
-						freeWorker := <-workerPoolChannel
-						go runSubmission(knock, freeWorker.from)
-					}
-
+					freeWorker := <-workerPoolChannel
+					go runSubmission(knock, publishChannel, freeWorker.from)
 				}
 			}
 		}
 	}()
 
 	log.Printf(" [x] Waiting for messages. To exit press CTRL+C")
+	defer receiver.CloseReceiver(AppConfig)
+	defer publisher.ClosePublisher(AppConfig)
 	<-forever
 }
