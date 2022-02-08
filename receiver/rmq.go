@@ -18,11 +18,13 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 
 	rmqUrl := config.RmqUrl(rmqConfig)
 	rmqConnection, err = amqp.Dial(rmqUrl)
+	commonutils.ReportOnError(err, "receiver:: can not connect to rmq")
 	if err != nil {
 		return nil, nil, err
 	}
 
 	receiverChannel, err = rmqConnection.Channel()
+	commonutils.ReportOnError(err, "receiver:: can not create channel")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -38,7 +40,10 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 		false,           // no-wait
 		nil,             // arguments
 	)
-	commonutils.ExitOnError(err, "Failed to declare a queue")
+	commonutils.ReportOnError(err, "receiver:: failed to declare a queue")
+	if err != nil {
+		return nil, nil, err
+	}
 
 	consumeChannel, _ := receiverChannel.Consume(
 		queue.Name,  // queue
@@ -76,6 +81,10 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 }
 
 func closeRmqReceiver() {
-	_ = rmqConnection.Close()
-	_ = receiverChannel.Close()
+	if rmqConnection != nil {
+		_ = rmqConnection.Close()
+	}
+	if receiverChannel != nil {
+		_ = receiverChannel.Close()
+	}
 }

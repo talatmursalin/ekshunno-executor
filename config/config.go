@@ -3,9 +3,9 @@ package config
 import (
 	"errors"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/viper"
 	"github.com/talatmursalin/ekshunno-executor/commonutils"
-	"strings"
 )
 
 type RabbitmqConfig struct {
@@ -16,8 +16,11 @@ type RabbitmqConfig struct {
 	Queue    string `mapstructure:"queue"`
 }
 
-type PublishFileConfig struct {
-	Name string `mapstructure:"name"`
+type LogConfig struct {
+	Agent string `mapstructure:"agent"`
+	Level string `mapstructure:"level"`
+	// file logger
+	FilePath string `mapstructure:"file_path"`
 }
 
 type Config struct {
@@ -25,9 +28,10 @@ type Config struct {
 	ReceiverType string          `mapstructure:"receiver_type"`
 	ReceiveRmq   *RabbitmqConfig `mapstructure:"rec_rmq"`
 
-	PublisherType string             `mapstructure:"publisher_type"`
-	PublishRmq    *RabbitmqConfig    `mapstructure:"pub_rmq"`
-	PublishFile   *PublishFileConfig `mapstructure:"pub_file"`
+	PublisherType string          `mapstructure:"publisher_type"`
+	PublishRmq    *RabbitmqConfig `mapstructure:"pub_rmq"`
+
+	LogConfig *LogConfig `mapstructure:"log"`
 }
 
 func RmqUrl(rmqConfig *RabbitmqConfig) string {
@@ -36,13 +40,16 @@ func RmqUrl(rmqConfig *RabbitmqConfig) string {
 
 //LoadConfig This method does not return the error, because we will not boot up for config related error
 func LoadConfig(configFile string) (config *Config) {
+	log.Debug().Msgf("config:: reading config from: %s", configFile)
 	viper.SetConfigFile(configFile)
 	err := viper.ReadInConfig()
-	commonutils.ExitOnError(err, "Config read error")
+	commonutils.ExitOnError(err, "config:: read error")
 	err = viper.Unmarshal(&config)
-	commonutils.ExitOnError(err, "Config unmarshal error")
+	commonutils.ExitOnError(err, "config:: unmarshal error")
 	loadReceiver(config)
 	loadPublisher(config)
+	err = viper.UnmarshalKey("log", &config.LogConfig)
+	commonutils.ExitOnError(err, "config:: log unmarshal error")
 	return config
 }
 
@@ -51,24 +58,20 @@ func loadReceiver(config *Config) {
 	switch config.ReceiverType {
 	case "rmq":
 		err = viper.UnmarshalKey("rec_rmq", &config.ReceiveRmq)
-		commonutils.ExitOnError(err, "rec_rmq config unmarshal error")
+		commonutils.ExitOnError(err, "config:: rec_rmq config unmarshal error")
 		break
 	default:
-		commonutils.ExitOnError(errors.New("No receiver_type"), "")
+		commonutils.ExitOnError(errors.New("no_receiver_type"), "Config::")
 	}
 }
 func loadPublisher(config *Config) {
 	var err error
-	all_publishers := strings.Split(config.PublisherType, "|")
-	for _, pub := range all_publishers {
-		switch pub {
-		case "pub_rmq":
-			err = viper.UnmarshalKey("pub_rmq", &config.PublishRmq)
-			commonutils.ExitOnError(err, "pub_rmq config unmarshal error")
-			break
-		case "file":
-			err = viper.UnmarshalKey("pub_file", &config.PublishFile)
-			commonutils.ExitOnError(err, "pub_file config unmarshal error")
-		}
+	switch config.PublisherType {
+	case "rmq":
+		err = viper.UnmarshalKey("rec_rmq", &config.PublishRmq)
+		commonutils.ExitOnError(err, "config:: pub_rmq config unmarshal error")
+		break
+	default:
+		commonutils.ExitOnError(errors.New("no_publisher_type"), "Config::")
 	}
 }

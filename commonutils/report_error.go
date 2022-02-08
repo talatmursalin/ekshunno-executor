@@ -1,21 +1,23 @@
 package commonutils
 
-import "log"
+import (
+	"github.com/rs/zerolog/log"
+)
 
 func ExitOnError(err error, msg string) {
 	if err != nil {
-		log.Fatalf("%s: %s", msg, err)
+		log.Error().Msgf("%s: %s", msg, err)
 	}
 }
 
 func PanicOnError(err error, msg string) {
 	if err != nil {
-		log.Panicf("%s: %s", msg, err)
+		log.Panic().Msgf("%s: %s", msg, err)
 	}
 }
 
 func ReportOnError(err error, msg string) {
 	if err != nil {
-		log.Printf("%s: %s\n", msg, err)
+		log.Info().Msgf("%s: %s\n", msg, err)
 	}
 }

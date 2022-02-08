@@ -10,6 +10,7 @@ require (
 	github.com/gorilla/mux v1.8.0 // indirect
 	github.com/moby/term v0.0.0-20201216013528-df9cb8a40635 // indirect
 	github.com/morikuni/aec v1.0.0 // indirect
+	github.com/rs/zerolog v1.26.1 // indirect
 	github.com/sirupsen/logrus v1.8.1 // indirect
 	github.com/spf13/viper v1.10.1 // indirect
 	github.com/streadway/amqp v1.0.0

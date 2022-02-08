@@ -2,7 +2,6 @@ package receiver
 
 import (
 	"errors"
-	"fmt"
 	"github.com/talatmursalin/ekshunno-executor/config"
 	"github.com/talatmursalin/ekshunno-executor/models"
 )
@@ -11,11 +10,10 @@ func GetReceivingChannel(cfg *config.Config) (<-chan *models.Knock, <-chan error
 	if cfg.ReceiveRmq != nil {
 		return initRmqReceiveChannel(cfg.ReceiveRmq)
 	}
-	return nil, nil, errors.New("No receiver configured")
+	return nil, nil, errors.New("no_receiver_configured")
 }
 
 func CloseReceiver(cfg *config.Config) {
-	fmt.Println("Closing Receiver")
 	if cfg.ReceiveRmq != nil {
 		closeRmqReceiver()
 	}

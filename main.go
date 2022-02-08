@@ -4,14 +4,15 @@ import (
 	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/rs/zerolog/log"
 	"github.com/talatmursalin/ekshunno-executor/commonutils"
 	"github.com/talatmursalin/ekshunno-executor/config"
 	"github.com/talatmursalin/ekshunno-executor/customenums"
+	"github.com/talatmursalin/ekshunno-executor/logger"
 	"github.com/talatmursalin/ekshunno-executor/models"
 	"github.com/talatmursalin/ekshunno-executor/publisher"
 	"github.com/talatmursalin/ekshunno-executor/receiver"
 	"github.com/talatmursalin/ekshunno-executor/xcore/executor"
-	"log"
 )
 
 type workerPoolMsg struct {
@@ -143,19 +144,28 @@ func getSubmissionErrorResult(err error) []byte {
 var AppConfig *config.Config
 
 func main() {
+	// set initial logger to console. this is necessary to report
+	// config parsing error. we will config our global logger gain when
+	// we have log config from yml
+	logger.InitLogger()
+
 	var err error
 	AppConfig = config.LoadConfig("./config.yml")
+	// config logger
+	_ = logger.ConfigureLogger(AppConfig)
 
 	// setup receiver
 	var msgChan <-chan *models.Knock
 	var errorChannel <-chan error
 	msgChan, errorChannel, err = receiver.GetReceivingChannel(AppConfig)
 	defer receiver.CloseReceiver(AppConfig)
-	commonutils.ExitOnError(err, "Failed to setup message queue")
+	if err != nil {
+		commonutils.ReportOnError(err, "main:: failed to setup receiver")
+		panic(err)
+	}
 
 	// setup publisher
-	publishChannel := make(chan *models.Result)
-	publisher.ConfigurePublisher(AppConfig, publishChannel)
+	publishChannel := publisher.ConfigurePublisher(AppConfig)
 
 	//
 	initWorkerPool(AppConfig.Concurrency) // max three concurrent judge process
@@ -181,7 +191,7 @@ func main() {
 		}
 	}()
 
-	log.Printf(" [x] Waiting for messages. To exit press CTRL+C")
+	log.Log().Msgf("[x] waiting for messages. To exit press CTRL+C")
 	defer receiver.CloseReceiver(AppConfig)
 	defer publisher.ClosePublisher(AppConfig)
 	<-forever
