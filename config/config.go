@@ -68,7 +68,7 @@ func loadPublisher(config *Config) {
 	var err error
 	switch config.PublisherType {
 	case "rmq":
-		err = viper.UnmarshalKey("rec_rmq", &config.PublishRmq)
+		err = viper.UnmarshalKey("pub_rmq", &config.PublishRmq)
 		commonutils.ExitOnError(err, "config:: pub_rmq config unmarshal error")
 		break
 	default:

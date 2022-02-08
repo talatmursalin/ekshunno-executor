@@ -50,49 +50,12 @@ func executeSubmission(knock *models.Knock) models.Result {
 func runSubmission(knock *models.Knock, publisherChannel chan<- *models.Result, done chan<- bool) {
 	result := executeSubmission(knock)
 	publisherChannel <- &result
-	log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
+	log.Debug().Msgf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
 		result.Verdict, result.Time, result.Memory)
 	verByte, _ := json.Marshal(result)
 	verdictChannel <- verdictMessage{msg: verByte, room: knock.SubmissionRoom}
 	done <- true
 }
-
-//
-//func publishVerdict() {
-//	for {
-//		msg := <-verdictChannel
-//		ch, err := rmqConnection.Channel()
-//		commonutils.ExitOnError(err, "Failed to open a channel")
-//		// defer ch.Close()
-//
-//		q, err := ch.QueueDeclare(
-//			msg.room, // name
-//			false,    // durable
-//			false,    // delete when unused
-//			false,    // exclusive
-//			false,    // no-wait
-//			nil,      // arguments
-//		)
-//		commonutils.ExitOnError(err, "Failed to declare a queue")
-//
-//		err = ch.Publish(
-//			"",     // exchange
-//			q.Name, // routing key
-//			false,  // mandatory
-//			false,  // immediate
-//			amqp.Publishing{
-//				ContentType: "text/plain",
-//				Body:        []byte(msg.msg),
-//			})
-//		commonutils.ExitOnError(err, "Failed to publish a message")
-//		log.Printf(" [x] Sent to %s", msg.room)
-//	}
-//}
-
-//func initVeridctChannel() {
-//	verdictChannel = make(chan verdictMessage)
-//	go publishVerdict()
-//}
 
 func initWorkerPool(n int) {
 	workerPoolChannel = make(chan workerPoolMsg, n)
@@ -136,7 +99,7 @@ func getSubmissionErrorResult(err error) []byte {
 		Memory:  0,
 		Output:  fmt.Sprintf("Invalid Submission: %s", err.Error()),
 	}
-	log.Printf(knockErr.Output)
+	log.Debug().Msgf(knockErr.Output)
 	errByte, _ := json.Marshal(knockErr)
 	return errByte
 }
@@ -165,8 +128,12 @@ func main() {
 	}
 
 	// setup publisher
-	publishChannel := publisher.ConfigurePublisher(AppConfig)
-
+	var publishChannel chan<- *models.Result
+	publishChannel, _, err = publisher.ConfigurePublisher(AppConfig)
+	if err != nil {
+		commonutils.ReportOnError(err, "main:: failed to setup publisher")
+		//panic(err) disabling exit on publisher error
+	}
 	//
 	initWorkerPool(AppConfig.Concurrency) // max three concurrent judge process
 	//initVeridctChannel()
@@ -175,13 +142,15 @@ func main() {
 		for {
 			select {
 			case e := <-errorChannel:
-				commonutils.ReportOnError(e, "Connection failed")
+				commonutils.ReportOnError(e, "main:: connection failed")
 				msgChan, errorChannel, err = receiver.GetReceivingChannel(AppConfig)
-				commonutils.ExitOnError(err, "Failed to setup message queue :: retry")
+				if err != nil {
+					commonutils.ReportOnError(err, "main:: retry failed to setup receiver")
+					panic(err)
+				}
 			case knock := <-msgChan:
 				err := knock.Validate()
 				if err != nil {
-					//go publishVerdict()
 					getSubmissionErrorResult(err)
 				} else {
 					freeWorker := <-workerPoolChannel
@@ -190,8 +159,7 @@ func main() {
 			}
 		}
 	}()
-
-	log.Log().Msgf("[x] waiting for messages. To exit press CTRL+C")
+	log.Info().Msgf("[x] waiting for messages. To exit press CTRL+C")
 	defer receiver.CloseReceiver(AppConfig)
 	defer publisher.ClosePublisher(AppConfig)
 	<-forever

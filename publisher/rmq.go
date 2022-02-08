@@ -1,4 +1,4 @@
-package receiver
+package publisher
 
 import (
 	"encoding/json"
@@ -11,26 +11,25 @@ import (
 var rmqConnection *amqp.Connection
 var rmqChannel *amqp.Channel
 
-func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Knock, <-chan error, error) {
+func initRmqPublisher(rmqConfig *config.RabbitmqConfig) (chan<- *models.Result, <-chan error, error) {
 	var err error
-	var queue amqp.Queue
+	var queue amqp.Queue // no need to declare queue when push to rmq
 
 	rmqUrl := config.RmqUrl(rmqConfig)
 	rmqConnection, err = amqp.Dial(rmqUrl)
-	commonutils.ReportOnError(err, "receiver:: can not connect to rmq")
+	commonutils.ReportOnError(err, "publisher:: can not connect to rmq")
 	if err != nil {
 		return nil, nil, err
 	}
 
 	rmqChannel, err = rmqConnection.Channel()
-	commonutils.ReportOnError(err, "receiver:: can not create channel")
+	commonutils.ReportOnError(err, "publisher:: can not create channel")
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// all errors from rmw will be thrown in this channel
 	errorChannel := rmqChannel.NotifyClose(make(chan *amqp.Error, 1))
-
 	queue, err = rmqChannel.QueueDeclare(
 		rmqConfig.Queue, // name
 		false,           // durable
@@ -39,33 +38,33 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 		false,           // no-wait
 		nil,             // arguments
 	)
-	commonutils.ReportOnError(err, "receiver:: failed to declare a queue")
+	commonutils.ReportOnError(err, "publisher:: failed to declare a queue")
 	if err != nil {
 		return nil, nil, err
 	}
 
-	consumeChannel, _ := rmqChannel.Consume(
-		queue.Name,  // queue
-		"go_client", // consumer
-		true,        // auto-ack
-		false,       // exclusive
-		false,       // no-local
-		false,       // no-wait
-		nil,         // args
-	)
-
-	deliveryChannel := make(chan *models.Knock)
+	publishChannel := make(chan *models.Result)
 	errChan := make(chan error)
 
 	go func() {
 		for {
-			msg := <-consumeChannel
-			knock := &models.Knock{}
-			err := json.Unmarshal(msg.Body, &knock)
+			result := <-publishChannel
+			knock, err := json.Marshal(result)
 			if err == nil {
-				deliveryChannel <- knock
+				err = rmqChannel.Publish(
+					"",
+					queue.Name,
+					false,
+					false,
+					amqp.Publishing{
+						ContentType: "text/plain",
+						Body:        knock,
+					})
+				if err != nil {
+					commonutils.ReportOnError(err, "publisher:: failed to publish msg in queue")
+				}
 			} else {
-				commonutils.ReportOnError(err, "receiver:: failed to unmarshal message")
+				commonutils.ReportOnError(err, "publisher:: failed to unmarshal message")
 			}
 		}
 	}()
@@ -76,7 +75,7 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 		}
 	}()
 
-	return deliveryChannel, errChan, err
+	return publishChannel, errChan, err
 }
 
 func closeRmqReceiver() {
