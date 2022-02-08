@@ -9,7 +9,7 @@ import (
 
 func TempDirName(prefix string) string {
 	randBytes := make([]byte, 5)
-	rand.Read(randBytes)
+	_, _ = rand.Read(randBytes)
 	return filepath.Join(os.TempDir(), prefix+hex.EncodeToString(randBytes))
 }
 
@@ -21,17 +21,17 @@ func CreateLocalDir(path string) {
 }
 
 func DeleteLocalDir(path string) {
-	os.RemoveAll(path)
+	_ = os.RemoveAll(path)
 }
 
 func WriteFile(path string, content string) error {
-	f, cerr := os.Create(path)
-	if cerr != nil {
-		return cerr
+	f, err := os.Create(path)
+	if err != nil {
+		return err
 	}
-	_, werr := f.WriteString(content)
-	if werr != nil {
-		return werr
+	_, err = f.WriteString(content)
+	if err != nil {
+		return err
 	}
 	return nil
 }
