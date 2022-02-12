@@ -13,6 +13,7 @@ import (
 	"github.com/talatmursalin/ekshunno-executor/publisher"
 	"github.com/talatmursalin/ekshunno-executor/receiver"
 	"github.com/talatmursalin/ekshunno-executor/xcore/executor"
+	"time"
 )
 
 type workerPoolMsg struct {
@@ -20,16 +21,18 @@ type workerPoolMsg struct {
 	from chan bool
 }
 
-type verdictMessage struct {
-	msg  []byte
-	room string
-}
-
 var (
-	// workerDoneChannels []chan bool
-	verdictChannel    chan verdictMessage
 	workerPoolChannel chan workerPoolMsg
 )
+
+var (
+	publishChannel chan<- *models.Result
+	pubErrNotifier <-chan error
+	msgChan        <-chan *models.Knock
+	recErrNotifier <-chan error
+)
+
+const MAX_RETRY = 10
 
 func executeSubmission(knock *models.Knock) models.Result {
 	lang, _ := customenums.StringToLangId(knock.Submission.Lang)
@@ -38,11 +41,11 @@ func executeSubmission(knock *models.Knock) models.Result {
 		knock.Submission.Memory,
 		0.25) // .1/4mb | 256kb
 	sDec, _ := b64.StdEncoding.DecodeString(knock.Submission.Src)
-	executor := executor.GetExecutor(lang, string(sDec), *limit)
+	theExecutor := executor.GetExecutor(lang, string(sDec), *limit)
 
-	result := executor.Compile()
+	result := theExecutor.Compile()
 	if result.Verdict == customenums.OK {
-		result = executor.Execute(knock.Submission.Input)
+		result = theExecutor.Execute(knock.Submission.Input)
 	}
 	return result
 }
@@ -52,8 +55,6 @@ func runSubmission(knock *models.Knock, publisherChannel chan<- *models.Result, 
 	publisherChannel <- &result
 	log.Debug().Msgf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
 		result.Verdict, result.Time, result.Memory)
-	verByte, _ := json.Marshal(result)
-	verdictChannel <- verdictMessage{msg: verByte, room: knock.SubmissionRoom}
 	done <- true
 }
 
@@ -74,24 +75,6 @@ func initWorkerPool(n int) {
 	}
 }
 
-//func retryConnection(url string) (<-chan amqp.Delivery, error) {
-//	cnt := 0
-//	for {
-//		cnt += 1
-//		time.Sleep(5 * time.Second)
-//		msgs, err := initReceiveChannel(url)
-//		if err != nil {
-//			if cnt > 720 {
-//				commonutils.ExitOnError(err, "Retry limit exceeded")
-//			}
-//			log.Printf("Failed to reconnect: %s", err)
-//			continue
-//		}
-//		log.Printf("[x] Reconnected to queue")
-//		return msgs, err
-//	}
-//}
-
 func getSubmissionErrorResult(err error) []byte {
 	knockErr := models.Result{
 		Verdict: customenums.IS,
@@ -106,6 +89,36 @@ func getSubmissionErrorResult(err error) []byte {
 
 var AppConfig *config.Config
 
+func connectReceiver() {
+	var err error
+	msgChan, recErrNotifier, err = receiver.GetReceivingChannel(AppConfig)
+	retry_count := 1
+	for err != nil && retry_count < MAX_RETRY {
+		commonutils.OnError(err, fmt.Sprintf("main:: retry attempt: %d - failed to setup receiver", retry_count))
+		time.Sleep(time.Second)
+		msgChan, recErrNotifier, err = receiver.GetReceivingChannel(AppConfig)
+		retry_count += 1
+	}
+	if err != nil && retry_count >= MAX_RETRY {
+		panic("failed to connect with receiver")
+	}
+}
+
+func connectPublisher() {
+	var err error
+	publishChannel, pubErrNotifier, err = publisher.ConfigurePublisher(AppConfig)
+	retry_count := 1
+	for err != nil && retry_count < MAX_RETRY {
+		commonutils.OnError(err, fmt.Sprintf("main:: retry attempt: %d - failed to setup publisher", retry_count))
+		time.Sleep(time.Second)
+		publishChannel, pubErrNotifier, err = publisher.ConfigurePublisher(AppConfig)
+		retry_count += 1
+	}
+	if err != nil && retry_count >= MAX_RETRY {
+		panic("failed to connect with publisher")
+	}
+}
+
 func main() {
 	// set initial logger to console. this is necessary to report
 	// config parsing error. we will config our global logger gain when
@@ -113,41 +126,31 @@ func main() {
 	logger.InitLogger()
 
 	var err error
-	AppConfig = config.LoadConfig("./config.yml")
-	// config logger
-	_ = logger.ConfigureLogger(AppConfig)
-
-	// setup receiver
-	var msgChan <-chan *models.Knock
-	var errorChannel <-chan error
-	msgChan, errorChannel, err = receiver.GetReceivingChannel(AppConfig)
-	defer receiver.CloseReceiver(AppConfig)
+	AppConfig, err = config.LoadConfig("./config.yml")
 	if err != nil {
-		commonutils.ReportOnError(err, "main:: failed to setup receiver")
 		panic(err)
 	}
-
-	// setup publisher
-	var publishChannel chan<- *models.Result
-	publishChannel, _, err = publisher.ConfigurePublisher(AppConfig)
+	// config logger
+	err = logger.ConfigureLogger(AppConfig)
 	if err != nil {
-		commonutils.ReportOnError(err, "main:: failed to setup publisher")
-		//panic(err) disabling exit on publisher error
+		commonutils.OnError(err, "logger can not be configured")
 	}
-	//
-	initWorkerPool(AppConfig.Concurrency) // max three concurrent judge process
-	//initVeridctChannel()
+
+	// setup connections
+	connectReceiver()
+	connectPublisher()
+
+	initWorkerPool(AppConfig.Concurrency) // max concurrent judge process
 	forever := make(chan bool)
 	go func() {
 		for {
 			select {
-			case e := <-errorChannel:
-				commonutils.ReportOnError(e, "main:: connection failed")
-				msgChan, errorChannel, err = receiver.GetReceivingChannel(AppConfig)
-				if err != nil {
-					commonutils.ReportOnError(err, "main:: retry failed to setup receiver")
-					panic(err)
-				}
+			case e := <-recErrNotifier:
+				commonutils.OnError(e, "main:: connection interrupted for receiver")
+				connectReceiver()
+			case e := <-pubErrNotifier:
+				commonutils.OnError(e, "main:: connection interrupted for publisher")
+				connectPublisher()
 			case knock := <-msgChan:
 				err := knock.Validate()
 				if err != nil {

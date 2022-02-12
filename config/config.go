@@ -39,39 +39,62 @@ func RmqUrl(rmqConfig *RabbitmqConfig) string {
 }
 
 //LoadConfig This method does not return the error, because we will not boot up for config related error
-func LoadConfig(configFile string) (config *Config) {
+func LoadConfig(configFile string) (config *Config, err error) {
 	log.Debug().Msgf("config:: reading config from: %s", configFile)
 	viper.SetConfigFile(configFile)
-	err := viper.ReadInConfig()
-	commonutils.ExitOnError(err, "config:: read error")
+	err = viper.ReadInConfig()
+	if err != nil {
+		commonutils.ReportOnError(err, "config:: read error")
+		return nil, err
+	}
 	err = viper.Unmarshal(&config)
-	commonutils.ExitOnError(err, "config:: unmarshal error")
-	loadReceiver(config)
-	loadPublisher(config)
+	if err != nil {
+		commonutils.ReportOnError(err, "config:: unmarshal error")
+		return nil, err
+	}
+	err = loadReceiver(config)
+	if err != nil {
+		return nil, err
+	}
+	err = loadPublisher(config)
+	if err != nil {
+		return nil, err
+	}
 	err = viper.UnmarshalKey("log", &config.LogConfig)
-	commonutils.ExitOnError(err, "config:: log unmarshal error")
-	return config
+	if err != nil {
+		commonutils.ReportOnError(err, "config:: log unmarshal error")
+		return nil, err
+	}
+	return config, err
 }
 
-func loadReceiver(config *Config) {
+func loadReceiver(config *Config) error {
 	var err error
 	switch config.ReceiverType {
 	case "rmq":
 		err = viper.UnmarshalKey("rec_rmq", &config.ReceiveRmq)
-		commonutils.ExitOnError(err, "config:: rec_rmq config unmarshal error")
-		break
+		if err != nil {
+			commonutils.ReportOnError(err, "config:: rec_rmq config unmarshal error")
+			return err
+		}
+		return nil
 	default:
-		commonutils.ExitOnError(errors.New("no_receiver_type"), "Config::")
+		commonutils.ReportOnError(errors.New("no_receiver_type"), "config::")
+		return errors.New("no receiver config")
 	}
 }
-func loadPublisher(config *Config) {
+func loadPublisher(config *Config) error {
 	var err error
 	switch config.PublisherType {
 	case "rmq":
 		err = viper.UnmarshalKey("pub_rmq", &config.PublishRmq)
-		commonutils.ExitOnError(err, "config:: pub_rmq config unmarshal error")
-		break
+		if err != nil {
+			commonutils.ReportOnError(err, "config:: pub_rmq config unmarshal error")
+			return err
+		}
+		return nil
 	default:
-		commonutils.ExitOnError(errors.New("no_publisher_type"), "Config::")
+		commonutils.ReportOnError(errors.New("no_publisher_type"), "config::")
+		return errors.New("no publisher config")
 	}
 }

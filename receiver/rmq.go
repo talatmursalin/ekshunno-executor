@@ -17,13 +17,11 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 
 	rmqUrl := config.RmqUrl(rmqConfig)
 	rmqConnection, err = amqp.Dial(rmqUrl)
-	commonutils.ReportOnError(err, "receiver:: can not connect to rmq")
 	if err != nil {
 		return nil, nil, err
 	}
 
 	rmqChannel, err = rmqConnection.Channel()
-	commonutils.ReportOnError(err, "receiver:: can not create channel")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -39,7 +37,6 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 		false,           // no-wait
 		nil,             // arguments
 	)
-	commonutils.ReportOnError(err, "receiver:: failed to declare a queue")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -62,10 +59,10 @@ func initRmqReceiveChannel(rmqConfig *config.RabbitmqConfig) (<-chan *models.Kno
 			msg := <-consumeChannel
 			knock := &models.Knock{}
 			err := json.Unmarshal(msg.Body, &knock)
-			if err == nil {
-				deliveryChannel <- knock
-			} else {
+			if err != nil {
 				commonutils.ReportOnError(err, "receiver:: failed to unmarshal message")
+			} else {
+				deliveryChannel <- knock
 			}
 		}
 	}()

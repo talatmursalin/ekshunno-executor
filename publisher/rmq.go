@@ -17,13 +17,11 @@ func initRmqPublisher(rmqConfig *config.RabbitmqConfig) (chan<- *models.Result, 
 
 	rmqUrl := config.RmqUrl(rmqConfig)
 	rmqConnection, err = amqp.Dial(rmqUrl)
-	commonutils.ReportOnError(err, "publisher:: can not connect to rmq")
 	if err != nil {
 		return nil, nil, err
 	}
 
 	rmqChannel, err = rmqConnection.Channel()
-	commonutils.ReportOnError(err, "publisher:: can not create channel")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -38,7 +36,6 @@ func initRmqPublisher(rmqConfig *config.RabbitmqConfig) (chan<- *models.Result, 
 		false,           // no-wait
 		nil,             // arguments
 	)
-	commonutils.ReportOnError(err, "publisher:: failed to declare a queue")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -61,7 +58,7 @@ func initRmqPublisher(rmqConfig *config.RabbitmqConfig) (chan<- *models.Result, 
 						Body:        knock,
 					})
 				if err != nil {
-					commonutils.ReportOnError(err, "publisher:: failed to publish msg in queue")
+					commonutils.OnError(err, "publisher:: failed to publish msg in queue")
 				}
 			} else {
 				commonutils.ReportOnError(err, "publisher:: failed to unmarshal message")

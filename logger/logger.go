@@ -19,7 +19,7 @@ func ConfigureLogger(cfg *config.Config) error {
 	zerolog.TimeFieldFormat = zerolog.TimeFormatUnix
 	level, err := zerolog.ParseLevel(logConfig.Level)
 	if err != nil {
-		commonutils.ReportOnError(err, "logger:: log level is not recognized. defaulting to DEBUG")
+		commonutils.OnError(err, "logger:: log level is not recognized. defaulting to DEBUG")
 		level = zerolog.DebugLevel
 	}
 
@@ -36,7 +36,7 @@ func ConfigureLogger(cfg *config.Config) error {
 		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stdout})
 		break
 	default:
-		log.Logger = zerolog.Nop()
+		log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
 	}
 	return nil
 }

@@ -18,6 +18,12 @@ func PanicOnError(err error, msg string) {
 
 func ReportOnError(err error, msg string) {
 	if err != nil {
-		log.Info().Msgf("%s: %s\n", msg, err)
+		log.Info().Msgf("%s: %s", msg, err)
+	}
+}
+
+func OnError(err error, msg string) {
+	if err != nil {
+		log.Error().Msgf("%s: %s", msg, err)
 	}
 }
