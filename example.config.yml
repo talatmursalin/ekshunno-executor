@@ -1,8 +1,19 @@
-general:
-  concurrency: 3
-rabbitmq:
-  host: 'localhost'
+concurrency: 3
+receiver_type: rmq
+rec_rmq:
+  host: localhost
   port: 5672
-  username: 'guest'
-  password: 'guest'
-  queue: 'submission_queue'
+  username: guest
+  password: guest
+  queue: submission_queue
+publisher_type: rmq
+pub_rmq:
+  host: localhost
+  port: 5672
+  username: guest
+  password: guest
+  queue: submission_result
+log:
+  agent: std # file | std
+  level: debug
+  file_path: ./executor_log.log

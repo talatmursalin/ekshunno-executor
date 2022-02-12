@@ -2,16 +2,18 @@ package models
 
 import "github.com/talatmursalin/ekshunno-executor/customenums"
 
+type Submission struct {
+	Memory   float32 `json:"memory"`
+	Time     float32 `json:"time"`
+	Input    string  `json:"input"`
+	Lang     string  `json:"lang"`
+	Compiler string  `json:"compiler"`
+	Src      string  `json:"src"`
+}
+
 type Knock struct {
-	SubmissionRoom string
-	Submission     struct {
-		Memory   float32
-		Time     float32
-		Input    string
-		Lang     string
-		Compiler string
-		Src      string
-	}
+	SubmissionRoom string     `json:"submission_room"`
+	Submission     Submission `json:"submission"`
 }
 
 func (k *Knock) Validate() error {

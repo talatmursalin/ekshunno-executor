@@ -4,16 +4,16 @@ import (
 	b64 "encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log"
-	"os"
-	"time"
-
-	"github.com/streadway/amqp"
+	"github.com/rs/zerolog/log"
 	"github.com/talatmursalin/ekshunno-executor/commonutils"
+	"github.com/talatmursalin/ekshunno-executor/config"
 	"github.com/talatmursalin/ekshunno-executor/customenums"
+	"github.com/talatmursalin/ekshunno-executor/logger"
 	"github.com/talatmursalin/ekshunno-executor/models"
+	"github.com/talatmursalin/ekshunno-executor/publisher"
+	"github.com/talatmursalin/ekshunno-executor/receiver"
 	"github.com/talatmursalin/ekshunno-executor/xcore/executor"
-	"gopkg.in/yaml.v2"
+	"time"
 )
 
 type workerPoolMsg struct {
@@ -21,130 +21,41 @@ type workerPoolMsg struct {
 	from chan bool
 }
 
-type verdictMessage struct {
-	msg  []byte
-	room string
-}
-
 var (
-	rmqConnection     *amqp.Connection
-	receiverChannel   *amqp.Channel
-	errorChannel      chan *amqp.Error
-	cfg               models.Config
 	workerPoolChannel chan workerPoolMsg
-	// workerDoneChannels []chan bool
-	verdictChannel chan verdictMessage
 )
 
-func loadConfig() {
-	f, err := os.Open("config.yml")
-	commonutils.ExitOnError(err, "Failed to read config.yaml")
-	defer f.Close()
-	decoder := yaml.NewDecoder(f)
-	err = decoder.Decode(&cfg)
-	commonutils.ExitOnError(err, "Failed to decode config")
-}
+var (
+	publishChannel chan<- *models.Result
+	pubErrNotifier <-chan error
+	msgChan        <-chan *models.Knock
+	recErrNotifier <-chan error
+)
 
-func executeSubmission(knock models.Knock) models.Result {
+const MAX_RETRY = 10
+
+func executeSubmission(knock *models.Knock) models.Result {
 	lang, _ := customenums.StringToLangId(knock.Submission.Lang)
 	limit := models.NewLimit(
 		knock.Submission.Time,
 		knock.Submission.Memory,
 		0.25) // .1/4mb | 256kb
 	sDec, _ := b64.StdEncoding.DecodeString(knock.Submission.Src)
-	executor := executor.GetExecutor(lang, string(sDec), *limit)
+	theExecutor := executor.GetExecutor(lang, string(sDec), *limit)
 
-	result := executor.Compile()
+	result := theExecutor.Compile()
 	if result.Verdict == customenums.OK {
-		result = executor.Execute(knock.Submission.Input)
+		result = theExecutor.Execute(knock.Submission.Input)
 	}
 	return result
 }
 
-func runSubmission(knock models.Knock, done chan bool) {
+func runSubmission(knock *models.Knock, publisherChannel chan<- *models.Result, done chan<- bool) {
 	result := executeSubmission(knock)
-	log.Printf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
+	publisherChannel <- &result
+	log.Debug().Msgf("result : [verdict: %s time:%0.3f sec memory: %0.2f mb]",
 		result.Verdict, result.Time, result.Memory)
-	verByte, _ := json.Marshal(result)
-	verdictChannel <- verdictMessage{msg: verByte, room: knock.SubmissionRoom}
 	done <- true
-}
-
-func publishVerdict() {
-	for {
-		msg := <-verdictChannel
-		ch, err := rmqConnection.Channel()
-		commonutils.ExitOnError(err, "Failed to open a channel")
-		// defer ch.Close()
-
-		q, err := ch.QueueDeclare(
-			msg.room, // name
-			false,    // durable
-			false,    // delete when unused
-			false,    // exclusive
-			false,    // no-wait
-			nil,      // arguments
-		)
-		commonutils.ExitOnError(err, "Failed to declare a queue")
-
-		err = ch.Publish(
-			"",     // exchange
-			q.Name, // routing key
-			false,  // mandatory
-			false,  // immediate
-			amqp.Publishing{
-				ContentType: "text/plain",
-				Body:        []byte(msg.msg),
-			})
-		commonutils.ExitOnError(err, "Failed to publish a message")
-		log.Printf(" [x] Sent to %s", msg.room)
-	}
-}
-
-func initConsumer() (<-chan amqp.Delivery, error) {
-	q, err := receiverChannel.QueueDeclare(
-		cfg.Rabbitmq.Queue, // name
-		false,              // durable
-		false,              // delete when unused
-		false,              // exclusive
-		false,              // no-wait
-		nil,                // arguments
-	)
-	commonutils.ExitOnError(err, "Failed to declare a queue")
-
-	return receiverChannel.Consume(
-		q.Name, // queue
-		"",     // consumer
-		true,   // auto-ack
-		false,  // exclusive
-		false,  // no-local
-		false,  // no-wait
-		nil,    // args
-	)
-}
-
-func initReceiveChannel(url string) (<-chan amqp.Delivery, error) {
-
-	var err error
-	rmqConnection, err = amqp.Dial(url)
-	if err != nil {
-		return nil, err
-	}
-
-	receiverChannel, err = rmqConnection.Channel()
-	if err != nil {
-		return nil, err
-	}
-
-	closeChan := make(chan *amqp.Error, 1)
-	errorChannel = receiverChannel.NotifyClose(closeChan)
-
-	return initConsumer()
-}
-
-func initVeridctChannel() {
-	verdictChannel = make(chan verdictMessage)
-	go publishVerdict()
 }
 
 func initWorkerPool(n int) {
@@ -164,24 +75,6 @@ func initWorkerPool(n int) {
 	}
 }
 
-func retryConnection(url string) (<-chan amqp.Delivery, error) {
-	cnt := 0
-	for {
-		cnt += 1
-		time.Sleep(5 * time.Second)
-		msgs, err := initReceiveChannel(url)
-		if err != nil {
-			if cnt > 720 {
-				commonutils.ExitOnError(err, "Retry limit exceeded")
-			}
-			log.Printf("Failed to reconnect: %s", err)
-			continue
-		}
-		log.Printf("[x] Reconnected to queue")
-		return msgs, err
-	}
-}
-
 func getSubmissionErrorResult(err error) []byte {
 	knockErr := models.Result{
 		Verdict: customenums.IS,
@@ -189,54 +82,88 @@ func getSubmissionErrorResult(err error) []byte {
 		Memory:  0,
 		Output:  fmt.Sprintf("Invalid Submission: %s", err.Error()),
 	}
-	log.Printf(knockErr.Output)
+	log.Debug().Msgf(knockErr.Output)
 	errByte, _ := json.Marshal(knockErr)
 	return errByte
 }
 
-func getRmqURL() string {
-	return fmt.Sprintf("amqp://%s:%s@%s:%s/",
-		cfg.Rabbitmq.Username, cfg.Rabbitmq.Password,
-		cfg.Rabbitmq.Host, cfg.Rabbitmq.Port)
+var AppConfig *config.Config
+
+func connectReceiver() {
+	var err error
+	msgChan, recErrNotifier, err = receiver.GetReceivingChannel(AppConfig)
+	retry_count := 1
+	for err != nil && retry_count < MAX_RETRY {
+		commonutils.OnError(err, fmt.Sprintf("main:: retry attempt: %d - failed to setup receiver", retry_count))
+		time.Sleep(time.Second)
+		msgChan, recErrNotifier, err = receiver.GetReceivingChannel(AppConfig)
+		retry_count += 1
+	}
+	if err != nil && retry_count >= MAX_RETRY {
+		panic("failed to connect with receiver")
+	}
+}
+
+func connectPublisher() {
+	var err error
+	publishChannel, pubErrNotifier, err = publisher.ConfigurePublisher(AppConfig)
+	retry_count := 1
+	for err != nil && retry_count < MAX_RETRY {
+		commonutils.OnError(err, fmt.Sprintf("main:: retry attempt: %d - failed to setup publisher", retry_count))
+		time.Sleep(time.Second)
+		publishChannel, pubErrNotifier, err = publisher.ConfigurePublisher(AppConfig)
+		retry_count += 1
+	}
+	if err != nil && retry_count >= MAX_RETRY {
+		panic("failed to connect with publisher")
+	}
 }
 
 func main() {
-	loadConfig()
-	rmqUrl := getRmqURL()
-	msgs, err := initReceiveChannel(rmqUrl)
-	commonutils.ExitOnError(err, "Failed to setup message queue")
-	defer rmqConnection.Close()
-	defer receiverChannel.Close()
-	initWorkerPool(cfg.General.Concurrency) // max three concurrent judge process
-	initVeridctChannel()
+	// set initial logger to console. this is necessary to report
+	// config parsing error. we will config our global logger gain when
+	// we have log config from yml
+	logger.InitLogger()
+
+	var err error
+	AppConfig, err = config.LoadConfig("./config.yml")
+	if err != nil {
+		panic(err)
+	}
+	// config logger
+	err = logger.ConfigureLogger(AppConfig)
+	if err != nil {
+		commonutils.OnError(err, "logger can not be configured")
+	}
+
+	// setup connections
+	connectReceiver()
+	connectPublisher()
+
+	initWorkerPool(AppConfig.Concurrency) // max concurrent judge process
 	forever := make(chan bool)
 	go func() {
 		for {
 			select {
-			case e := <-errorChannel:
-				commonutils.ReportOnError(e, "Connection failed")
-				msgs, err = retryConnection(rmqUrl)
-			case msg := <-msgs:
-				knock := models.Knock{}
-				err := json.Unmarshal(msg.Body, &knock)
+			case e := <-recErrNotifier:
+				commonutils.OnError(e, "main:: connection interrupted for receiver")
+				connectReceiver()
+			case e := <-pubErrNotifier:
+				commonutils.OnError(e, "main:: connection interrupted for publisher")
+				connectPublisher()
+			case knock := <-msgChan:
+				err := knock.Validate()
 				if err != nil {
-					subErr := getSubmissionErrorResult(err)
-					commonutils.ReportOnError(err, string(subErr))
+					getSubmissionErrorResult(err)
 				} else {
-					err := knock.Validate()
-					if err != nil {
-						go publishVerdict()
-						getSubmissionErrorResult(err)
-					} else {
-						freeWorker := <-workerPoolChannel
-						go runSubmission(knock, freeWorker.from)
-					}
-
+					freeWorker := <-workerPoolChannel
+					go runSubmission(knock, publishChannel, freeWorker.from)
 				}
 			}
 		}
 	}()
-
-	log.Printf(" [x] Waiting for messages. To exit press CTRL+C")
+	log.Info().Msgf("[x] waiting for messages. To exit press CTRL+C")
+	defer receiver.CloseReceiver(AppConfig)
+	defer publisher.ClosePublisher(AppConfig)
 	<-forever
 }
